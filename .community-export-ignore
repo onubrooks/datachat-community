@@ -1,0 +1,44 @@
+.git/
+.venv/
+venv/
+node_modules/
+.pytest_cache/
+__pycache__/
+*.pyc
+.DS_Store
+.coverage
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.claude/
+chroma_data/
+*.egg-info/
+datachat.egg-info/
+.env
+.env.local
+.env.*.local
+
+# Private strategy/planning docs
+docs/ARCHITECTURE_DYNAMIC_DATA_AGENT.md
+docs/GTM_90_DAY_PLAN.md
+docs/LEVELS.md
+docs/PRD.md
+docs/ROADMAP.md
+docs/OSS_SPLIT_CHECKLIST.md
+
+# Private specs/templates
+docs/specs/
+docs/templates/COMMUNITY_REPO_README_TEMPLATE.md
+
+# Private/internal artifacts
+docs/finance/FINANCE_WORKFLOW_VALUE_PROOF.md
+reports/
+eval/
+workspace_demo/
+
+# Keep community-repo specific files managed there
+LICENSE
+docs/FEATURE_MATRIX.md

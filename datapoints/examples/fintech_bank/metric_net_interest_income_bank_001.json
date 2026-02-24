@@ -1,0 +1,35 @@
+{
+  "datapoint_id": "metric_net_interest_income_bank_001",
+  "type": "Business",
+  "name": "Net Interest Income",
+  "owner": "finance-analytics@example.com",
+  "tags": [
+    "fintech",
+    "income",
+    "interest"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
+  },
+  "calculation": "SUM(bank_loan_payments.interest_component) FILTER (WHERE bank_loan_payments.status = 'posted')",
+  "synonyms": [
+    "interest income",
+    "nii",
+    "loan interest earned"
+  ],
+  "business_rules": [
+    "Count only posted loan payments",
+    "Use interest_component from loan payment split",
+    "Exclude missed/reversed payment records"
+  ],
+  "related_tables": [
+    "public.bank_loan_payments",
+    "public.bank_loans"
+  ],
+  "unit": "USD",
+  "aggregation": "SUM"
+}

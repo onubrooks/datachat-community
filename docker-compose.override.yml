@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  backend:
+    environment:
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./backend:/app
+      - chroma_data:/app/chroma_data
+      - backend_logs:/app/logs

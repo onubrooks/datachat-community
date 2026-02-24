@@ -1,0 +1,75 @@
+{
+  "datapoint_id": "table_bank_transactions_001",
+  "type": "Schema",
+  "name": "Bank Transactions",
+  "owner": "payments-ops@example.com",
+  "tags": [
+    "fintech",
+    "transactions",
+    "payments"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.bank_transactions",
+  "schema": "public",
+  "business_purpose": "Transaction-level payment activity used for payment analytics, fee reporting, and failure monitoring.",
+  "key_columns": [
+    {
+      "name": "txn_id",
+      "type": "INTEGER",
+      "business_meaning": "Unique transaction identifier",
+      "nullable": false
+    },
+    {
+      "name": "business_date",
+      "type": "DATE",
+      "business_meaning": "Reporting date for the transaction",
+      "nullable": false
+    },
+    {
+      "name": "account_id",
+      "type": "INTEGER",
+      "business_meaning": "Account affected by the transaction",
+      "nullable": false
+    },
+    {
+      "name": "amount",
+      "type": "NUMERIC(14,2)",
+      "business_meaning": "Transaction amount in account currency",
+      "nullable": false
+    },
+    {
+      "name": "fee_amount",
+      "type": "NUMERIC(10,2)",
+      "business_meaning": "Fee charged for processing the transaction",
+      "nullable": false
+    },
+    {
+      "name": "status",
+      "type": "TEXT",
+      "business_meaning": "Processing status such as posted, declined, or reversed",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.bank_accounts",
+      "join_column": "account_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT business_date, SUM(amount) FROM bank_transactions WHERE status = 'posted' GROUP BY business_date",
+    "SELECT status, COUNT(*) FROM bank_transactions GROUP BY status"
+  ],
+  "gotchas": [
+    "Use status = 'posted' for settled volume; declined/reversed are not settled"
+  ],
+  "freshness": "Near real-time",
+  "row_count": 18
+}

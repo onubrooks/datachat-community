@@ -1,0 +1,75 @@
+{
+  "datapoint_id": "table_grocery_waste_events_001",
+  "type": "Schema",
+  "name": "Waste Events",
+  "owner": "inventory-control@example.com",
+  "tags": [
+    "grocery",
+    "waste",
+    "shrink"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.grocery_waste_events",
+  "schema": "public",
+  "business_purpose": "Tracks spoilage and damage losses for shrink and waste-cost analysis.",
+  "key_columns": [
+    {
+      "name": "waste_id",
+      "type": "INTEGER",
+      "business_meaning": "Waste event identifier",
+      "nullable": false
+    },
+    {
+      "name": "event_date",
+      "type": "DATE",
+      "business_meaning": "Date waste was recorded",
+      "nullable": false
+    },
+    {
+      "name": "store_id",
+      "type": "INTEGER",
+      "business_meaning": "Store where waste occurred",
+      "nullable": false
+    },
+    {
+      "name": "product_id",
+      "type": "INTEGER",
+      "business_meaning": "Product wasted",
+      "nullable": false
+    },
+    {
+      "name": "estimated_cost",
+      "type": "NUMERIC(12,2)",
+      "business_meaning": "Estimated direct cost impact of waste",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.grocery_stores",
+      "join_column": "store_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    },
+    {
+      "target_table": "public.grocery_products",
+      "join_column": "product_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT event_date, SUM(estimated_cost) FROM grocery_waste_events GROUP BY event_date",
+    "SELECT reason, COUNT(*) FROM grocery_waste_events GROUP BY reason"
+  ],
+  "gotchas": [
+    "Waste quantity and estimated_cost are operational estimates and may be reconciled later"
+  ],
+  "freshness": "Daily",
+  "row_count": 6
+}

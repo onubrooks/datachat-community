@@ -1,0 +1,26 @@
+{
+  "datapoint_id": "metric_loan_default_rate_definition_001",
+  "type": "Business",
+  "name": "Loan Default Rate",
+  "owner": "risk-analytics@datachat.ai",
+  "tags": ["global", "definition", "risk"],
+  "metadata": {
+    "scope": "global",
+    "grain": "metric_definition",
+    "exclusions": "Exclude loans that are not yet eligible for default classification.",
+    "confidence_notes": "Definition-only DataPoint for risk metric consistency across databases.",
+    "freshness": "On change"
+  },
+  "calculation": "loan_default_rate = defaulted_loans / total_loans",
+  "synonyms": [
+    "default rate",
+    "loan delinquency rate"
+  ],
+  "business_rules": [
+    "Use organizational default threshold policy (for example, 90+ DPD).",
+    "Numerator and denominator must use the same reporting cohort."
+  ],
+  "related_tables": [],
+  "unit": "percentage",
+  "aggregation": "CUSTOM"
+}

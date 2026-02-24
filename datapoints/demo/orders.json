@@ -1,0 +1,66 @@
+{
+  "datapoint_id": "table_orders_001",
+  "type": "Schema",
+  "name": "Orders Table",
+  "owner": "data-team@example.com",
+  "tags": ["demo", "orders", "sales"],
+  "metadata": {
+    "source": "demo-seed"
+  },
+  "table_name": "public.orders",
+  "schema": "public",
+  "business_purpose": "Stores demo purchase orders placed by users.",
+  "key_columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "business_meaning": "Unique order identifier",
+      "nullable": false
+    },
+    {
+      "name": "user_id",
+      "type": "INTEGER",
+      "business_meaning": "User who placed the order",
+      "nullable": false
+    },
+    {
+      "name": "amount",
+      "type": "NUMERIC(12,2)",
+      "business_meaning": "Order amount",
+      "nullable": false
+    },
+    {
+      "name": "status",
+      "type": "TEXT",
+      "business_meaning": "Order status",
+      "nullable": false
+    },
+    {
+      "name": "created_at",
+      "type": "TIMESTAMP",
+      "business_meaning": "Order creation timestamp",
+      "nullable": false
+    },
+    {
+      "name": "order_date",
+      "type": "DATE",
+      "business_meaning": "Date the order was placed",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.users",
+      "join_column": "user_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT COUNT(*) FROM orders",
+    "SELECT SUM(amount) FROM orders WHERE status = 'completed'"
+  ],
+  "gotchas": [],
+  "freshness": "T-1",
+  "row_count": 4
+}

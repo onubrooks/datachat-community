@@ -1,0 +1,1 @@
+This is not a JSON file, it should be skipped during directory loading.

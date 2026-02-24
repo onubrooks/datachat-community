@@ -1,0 +1,50 @@
+{
+  "datapoint_id": "table_grocery_suppliers_001",
+  "type": "Schema",
+  "name": "Grocery Suppliers",
+  "owner": "ops-data@example.com",
+  "tags": [
+    "grocery",
+    "suppliers",
+    "procurement"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.grocery_suppliers",
+  "schema": "public",
+  "business_purpose": "Supplier master data used for purchase orders and lead-time analysis.",
+  "key_columns": [
+    {
+      "name": "supplier_id",
+      "type": "INTEGER",
+      "business_meaning": "Unique supplier identifier",
+      "nullable": false
+    },
+    {
+      "name": "supplier_name",
+      "type": "TEXT",
+      "business_meaning": "Name of supplier",
+      "nullable": false
+    },
+    {
+      "name": "lead_time_days",
+      "type": "INTEGER",
+      "business_meaning": "Expected delivery lead time in days",
+      "nullable": false
+    }
+  ],
+  "relationships": [],
+  "common_queries": [
+    "SELECT AVG(lead_time_days) FROM grocery_suppliers",
+    "SELECT supplier_name, lead_time_days FROM grocery_suppliers ORDER BY lead_time_days"
+  ],
+  "gotchas": [
+    "Lead time is expected SLA and may differ from actual received time"
+  ],
+  "freshness": "Weekly",
+  "row_count": 3
+}

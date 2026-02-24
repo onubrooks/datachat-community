@@ -1,0 +1,75 @@
+{
+  "datapoint_id": "table_bank_loans_001",
+  "type": "Schema",
+  "name": "Bank Loans",
+  "owner": "credit-risk@example.com",
+  "tags": [
+    "fintech",
+    "loans",
+    "risk"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.bank_loans",
+  "schema": "public",
+  "business_purpose": "Loan book records including principal, pricing, status, and delinquency indicators.",
+  "key_columns": [
+    {
+      "name": "loan_id",
+      "type": "INTEGER",
+      "business_meaning": "Loan identifier",
+      "nullable": false
+    },
+    {
+      "name": "customer_id",
+      "type": "INTEGER",
+      "business_meaning": "Borrower customer identifier",
+      "nullable": false
+    },
+    {
+      "name": "principal_amount",
+      "type": "NUMERIC(14,2)",
+      "business_meaning": "Original principal amount",
+      "nullable": false
+    },
+    {
+      "name": "interest_rate",
+      "type": "NUMERIC(5,4)",
+      "business_meaning": "Annualized interest rate",
+      "nullable": false
+    },
+    {
+      "name": "days_past_due",
+      "type": "INTEGER",
+      "business_meaning": "Current delinquency bucket in days",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.bank_customers",
+      "join_column": "customer_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    },
+    {
+      "target_table": "public.bank_accounts",
+      "join_column": "repayment_account_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT status, COUNT(*) FROM bank_loans GROUP BY status",
+    "SELECT AVG(days_past_due) FROM bank_loans"
+  ],
+  "gotchas": [
+    "Default tracking typically uses days_past_due >= 90"
+  ],
+  "freshness": "Daily",
+  "row_count": 4
+}

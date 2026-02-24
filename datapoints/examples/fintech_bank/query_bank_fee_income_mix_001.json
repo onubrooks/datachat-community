@@ -1,0 +1,45 @@
+{
+  "datapoint_id": "query_bank_fee_income_mix_001",
+  "type": "Query",
+  "name": "Fee Income Mix by Transaction Type",
+  "owner": "finance-analytics@example.com",
+  "tags": [
+    "fintech",
+    "fees",
+    "income_mix",
+    "transaction_types"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "transaction_type_fee_income_aggregation",
+    "exclusions": "Includes posted transactions only and excludes zero-fee transaction types.",
+    "confidence_notes": "Fee-share outputs validated on seeded fee_amount patterns."
+  },
+  "sql_template": "SELECT\n    bt.txn_type,\n    ROUND(SUM(bt.fee_amount)::numeric, 2) AS total_fee_income,\n    ROUND(\n        100.0 * SUM(bt.fee_amount) / NULLIF(SUM(SUM(bt.fee_amount)) OVER (), 0),\n        2\n    ) AS fee_share_pct\nFROM public.bank_transactions bt\nWHERE bt.status = 'posted'\n  AND bt.business_date >= CURRENT_DATE - ({lookback_days} * INTERVAL '1 day')\nGROUP BY bt.txn_type\nHAVING SUM(bt.fee_amount) > 0\nORDER BY total_fee_income DESC\nLIMIT {top_n};",
+  "parameters": {
+    "lookback_days": {
+      "type": "integer",
+      "required": false,
+      "default": 30,
+      "description": "Lookback window in days."
+    },
+    "top_n": {
+      "type": "integer",
+      "required": false,
+      "default": 10,
+      "description": "Number of transaction types returned."
+    }
+  },
+  "description": "Shows fee income contribution by transaction type to support revenue-mix analysis.",
+  "validation": {
+    "expected_columns": [
+      "txn_type",
+      "total_fee_income",
+      "fee_share_pct"
+    ],
+    "max_rows": 30
+  },
+  "related_tables": [
+    "public.bank_transactions"
+  ]
+}

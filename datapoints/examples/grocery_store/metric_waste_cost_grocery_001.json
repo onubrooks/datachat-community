@@ -1,0 +1,37 @@
+{
+  "datapoint_id": "metric_waste_cost_grocery_001",
+  "type": "Business",
+  "name": "Waste Cost",
+  "owner": "inventory-control@example.com",
+  "tags": [
+    "grocery",
+    "waste",
+    "shrink",
+    "cost"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
+  },
+  "calculation": "SUM(grocery_waste_events.estimated_cost)",
+  "synonyms": [
+    "shrink cost",
+    "waste spend",
+    "spoilage cost"
+  ],
+  "business_rules": [
+    "Use event_date for daily waste reporting",
+    "Break down by reason to identify operational issues",
+    "Compare against revenue to measure shrink impact"
+  ],
+  "related_tables": [
+    "public.grocery_waste_events",
+    "public.grocery_stores",
+    "public.grocery_products"
+  ],
+  "unit": "USD",
+  "aggregation": "SUM"
+}

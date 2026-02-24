@@ -1,0 +1,28 @@
+{
+  "datapoint_id": "proc_daily_sales_rollup_001",
+  "type": "Process",
+  "name": "Daily Sales Rollup",
+  "owner": "platform-data@example.com",
+  "tags": [
+    "grocery",
+    "sales",
+    "pipeline"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "pipeline_execution",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "schedule": "15 2 * * *",
+  "data_freshness": "Daily by 02:45 local time",
+  "target_tables": [
+    "public.grocery_sales_transactions"
+  ],
+  "dependencies": [
+    "public.grocery_stores",
+    "public.grocery_products"
+  ],
+  "sla": "Complete within 20 minutes",
+  "monitoring_url": "https://ops.example.com/pipelines/daily-sales-rollup"
+}

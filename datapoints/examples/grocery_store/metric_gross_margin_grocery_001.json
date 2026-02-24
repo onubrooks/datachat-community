@@ -1,0 +1,35 @@
+{
+  "datapoint_id": "metric_gross_margin_grocery_001",
+  "type": "Business",
+  "name": "Gross Margin",
+  "owner": "finance-analytics@example.com",
+  "tags": [
+    "grocery",
+    "margin",
+    "profitability"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
+  },
+  "calculation": "SUM(st.total_amount - (st.quantity * p.unit_cost)) / NULLIF(SUM(st.total_amount), 0)",
+  "synonyms": [
+    "gross profit margin",
+    "margin percentage",
+    "profit margin"
+  ],
+  "business_rules": [
+    "Join sales transactions to product unit_cost",
+    "Use net line totals after discounts",
+    "Result is ratio and can be expressed as percent"
+  ],
+  "related_tables": [
+    "public.grocery_sales_transactions",
+    "public.grocery_products"
+  ],
+  "unit": "ratio",
+  "aggregation": "CUSTOM"
+}

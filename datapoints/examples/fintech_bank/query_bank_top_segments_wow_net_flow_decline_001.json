@@ -1,0 +1,50 @@
+{
+  "datapoint_id": "query_bank_top_segments_wow_net_flow_decline_001",
+  "type": "Query",
+  "name": "Top Segments Driving Week over Week Net Flow Decline",
+  "owner": "finance-analytics@example.com",
+  "tags": [
+    "fintech",
+    "net_flow",
+    "week_over_week",
+    "decline",
+    "segment",
+    "drivers"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "weekly_segment_driver_aggregation",
+    "exclusions": "Uses posted transactions only; ignores pending, declined, and reversed statuses.",
+    "confidence_notes": "Driver ranking validated with deterministic week-over-week comparison on seeded data."
+  },
+  "sql_template": "WITH weekly_flows AS (\n    SELECT\n        DATE_TRUNC('week', bt.business_date)::date AS week_start,\n        bc.segment,\n        SUM(CASE WHEN bt.direction = 'credit' THEN bt.amount ELSE -bt.amount END) AS net_flow\n    FROM public.bank_transactions bt\n    JOIN public.bank_accounts ba ON bt.account_id = ba.account_id\n    JOIN public.bank_customers bc ON ba.customer_id = bc.customer_id\n    WHERE bt.status = 'posted'\n      AND bt.business_date >= CURRENT_DATE - ({lookback_days} * INTERVAL '1 day')\n    GROUP BY 1, 2\n), ranked_weeks AS (\n    SELECT\n        week_start,\n        segment,\n        net_flow,\n        ROW_NUMBER() OVER (PARTITION BY segment ORDER BY week_start DESC) AS rn\n    FROM weekly_flows\n), latest AS (\n    SELECT segment, net_flow AS current_week_net_flow\n    FROM ranked_weeks\n    WHERE rn = 1\n), previous AS (\n    SELECT segment, net_flow AS previous_week_net_flow\n    FROM ranked_weeks\n    WHERE rn = 2\n)\nSELECT\n    l.segment,\n    ROUND(p.previous_week_net_flow::numeric, 2) AS previous_week_net_flow,\n    ROUND(l.current_week_net_flow::numeric, 2) AS current_week_net_flow,\n    ROUND((p.previous_week_net_flow - l.current_week_net_flow)::numeric, 2) AS decline_amount\nFROM latest l\nJOIN previous p ON p.segment = l.segment\nWHERE l.current_week_net_flow < p.previous_week_net_flow\nORDER BY decline_amount DESC\nLIMIT {top_n};",
+  "parameters": {
+    "lookback_days": {
+      "type": "integer",
+      "required": false,
+      "default": 56,
+      "description": "Lookback window in days."
+    },
+    "top_n": {
+      "type": "integer",
+      "required": false,
+      "default": 2,
+      "description": "Maximum number of segments returned."
+    }
+  },
+  "description": "Ranks segments by the largest week-over-week net-flow decline using the latest two weeks in scope.",
+  "validation": {
+    "expected_columns": [
+      "segment",
+      "previous_week_net_flow",
+      "current_week_net_flow",
+      "decline_amount"
+    ],
+    "max_rows": 20
+  },
+  "related_tables": [
+    "public.bank_transactions",
+    "public.bank_accounts",
+    "public.bank_customers"
+  ]
+}

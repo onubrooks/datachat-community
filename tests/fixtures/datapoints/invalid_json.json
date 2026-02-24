@@ -1,0 +1,5 @@
+{
+  "datapoint_id": "invalid_001",
+  "type": "Schema",
+  "name": "Invalid JSON",
+  "missing_closing_brace": true

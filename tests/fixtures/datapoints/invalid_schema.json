@@ -1,0 +1,10 @@
+{
+  "datapoint_id": "invalid__double_underscore_001",
+  "type": "Schema",
+  "name": "Invalid Schema - Double Underscore",
+  "table_name": "test.invalid",
+  "schema": "test",
+  "business_purpose": "This has an invalid datapoint_id with double underscores",
+  "key_columns": [],
+  "owner": "test@example.com"
+}

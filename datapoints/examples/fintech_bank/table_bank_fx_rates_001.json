@@ -1,0 +1,56 @@
+{
+  "datapoint_id": "table_bank_fx_rates_001",
+  "type": "Schema",
+  "name": "FX Rates",
+  "owner": "treasury-ops@example.com",
+  "tags": [
+    "fintech",
+    "fx",
+    "rates"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.bank_fx_rates",
+  "schema": "public",
+  "business_purpose": "Daily FX reference rates for converting balances and payments across currencies.",
+  "key_columns": [
+    {
+      "name": "rate_date",
+      "type": "DATE",
+      "business_meaning": "Effective date of FX rate",
+      "nullable": false
+    },
+    {
+      "name": "base_currency",
+      "type": "TEXT",
+      "business_meaning": "Base currency code",
+      "nullable": false
+    },
+    {
+      "name": "quote_currency",
+      "type": "TEXT",
+      "business_meaning": "Quote currency code",
+      "nullable": false
+    },
+    {
+      "name": "rate",
+      "type": "NUMERIC(12,6)",
+      "business_meaning": "Conversion rate from base to quote",
+      "nullable": false
+    }
+  ],
+  "relationships": [],
+  "common_queries": [
+    "SELECT rate_date, base_currency, quote_currency, rate FROM bank_fx_rates ORDER BY rate_date",
+    "SELECT MAX(rate_date) FROM bank_fx_rates"
+  ],
+  "gotchas": [
+    "Use rate_date aligned to business_date for historical conversions"
+  ],
+  "freshness": "Daily",
+  "row_count": 6
+}

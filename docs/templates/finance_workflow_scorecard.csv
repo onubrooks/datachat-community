@@ -1,0 +1,3 @@
+prompt_id,has_source_attribution,source_count,clarification_count,driver_quality_pass,consistency_applicable,consistency_pass,reproducibility_pass,notes
+fintech_01,yes,2,0,yes,yes,yes,yes,baseline sample
+fintech_02,yes,3,1,yes,yes,yes,yes,one clarification accepted

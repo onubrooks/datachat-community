@@ -1,0 +1,75 @@
+{
+  "datapoint_id": "table_bank_loan_payments_001",
+  "type": "Schema",
+  "name": "Loan Payments",
+  "owner": "credit-risk@example.com",
+  "tags": [
+    "fintech",
+    "loans",
+    "repayments"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.bank_loan_payments",
+  "schema": "public",
+  "business_purpose": "Loan repayment events used for principal reduction and interest income analysis.",
+  "key_columns": [
+    {
+      "name": "payment_id",
+      "type": "INTEGER",
+      "business_meaning": "Loan payment identifier",
+      "nullable": false
+    },
+    {
+      "name": "loan_id",
+      "type": "INTEGER",
+      "business_meaning": "Loan receiving the payment",
+      "nullable": false
+    },
+    {
+      "name": "payment_date",
+      "type": "DATE",
+      "business_meaning": "Posting date of the payment",
+      "nullable": false
+    },
+    {
+      "name": "principal_component",
+      "type": "NUMERIC(14,2)",
+      "business_meaning": "Portion applied to principal",
+      "nullable": false
+    },
+    {
+      "name": "interest_component",
+      "type": "NUMERIC(14,2)",
+      "business_meaning": "Portion recognized as interest income",
+      "nullable": false
+    },
+    {
+      "name": "status",
+      "type": "TEXT",
+      "business_meaning": "Payment status such as posted or missed",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.bank_loans",
+      "join_column": "loan_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT payment_date, SUM(interest_component) FROM bank_loan_payments WHERE status = 'posted' GROUP BY payment_date",
+    "SELECT status, COUNT(*) FROM bank_loan_payments GROUP BY status"
+  ],
+  "gotchas": [
+    "Exclude missed payments from income calculations"
+  ],
+  "freshness": "Daily",
+  "row_count": 6
+}

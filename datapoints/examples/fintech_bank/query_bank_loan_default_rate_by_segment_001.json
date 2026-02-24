@@ -1,0 +1,43 @@
+{
+  "datapoint_id": "query_bank_loan_default_rate_by_segment_001",
+  "type": "Query",
+  "name": "Loan Default Rate by Segment",
+  "owner": "credit-risk@example.com",
+  "tags": [
+    "fintech",
+    "loans",
+    "default_rate",
+    "segment",
+    "portfolio_risk"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "segment_loan_portfolio_aggregation",
+    "exclusions": "Default proxy uses days_past_due >= 90 or non_performing status.",
+    "confidence_notes": "Validated against seeded loan delinquency states and customer segment assignments."
+  },
+  "sql_template": "SELECT\n    bc.segment,\n    COUNT(*) AS total_loans,\n    COUNT(*) FILTER (\n        WHERE l.days_past_due >= {default_dpd_threshold}\n           OR l.status = 'non_performing'\n    ) AS defaulted_loans,\n    ROUND(\n        100.0 * COUNT(*) FILTER (\n            WHERE l.days_past_due >= {default_dpd_threshold}\n               OR l.status = 'non_performing'\n        ) / NULLIF(COUNT(*), 0),\n        2\n    ) AS default_rate_pct,\n    ROUND(AVG(l.days_past_due)::numeric, 2) AS avg_days_past_due\nFROM public.bank_loans l\nJOIN public.bank_customers bc ON l.customer_id = bc.customer_id\nGROUP BY bc.segment\nORDER BY default_rate_pct DESC, avg_days_past_due DESC;",
+  "parameters": {
+    "default_dpd_threshold": {
+      "type": "integer",
+      "required": false,
+      "default": 90,
+      "description": "Days-past-due threshold used as default proxy."
+    }
+  },
+  "description": "Summarizes loan default rate and delinquency level by customer segment.",
+  "validation": {
+    "expected_columns": [
+      "segment",
+      "total_loans",
+      "defaulted_loans",
+      "default_rate_pct",
+      "avg_days_past_due"
+    ],
+    "max_rows": 20
+  },
+  "related_tables": [
+    "public.bank_loans",
+    "public.bank_customers"
+  ]
+}

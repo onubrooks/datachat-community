@@ -1,0 +1,58 @@
+{
+  "datapoint_id": "table_fact_sales_001",
+  "type": "Schema",
+  "name": "Fact Sales Table",
+  "table_name": "analytics.fact_sales",
+  "schema": "analytics",
+  "business_purpose": "Central fact table for all sales transactions across regions",
+  "key_columns": [
+    {
+      "name": "sale_id",
+      "type": "BIGINT",
+      "business_meaning": "Unique identifier for each sale",
+      "nullable": false
+    },
+    {
+      "name": "amount",
+      "type": "DECIMAL(18,2)",
+      "business_meaning": "Transaction value in USD",
+      "nullable": false
+    },
+    {
+      "name": "sale_date",
+      "type": "DATE",
+      "business_meaning": "Date when the sale occurred",
+      "nullable": false
+    },
+    {
+      "name": "region_id",
+      "type": "INTEGER",
+      "business_meaning": "Foreign key to region dimension",
+      "nullable": true
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "dim_region",
+      "join_column": "region_id",
+      "cardinality": "N:1"
+    },
+    {
+      "target_table": "dim_product",
+      "join_column": "product_id",
+      "cardinality": "N:1"
+    }
+  ],
+  "common_queries": [
+    "SELECT SUM(amount) FROM analytics.fact_sales WHERE sale_date >= '2024-01-01'",
+    "SELECT region_id, SUM(amount) FROM analytics.fact_sales GROUP BY region_id"
+  ],
+  "gotchas": [
+    "Always filter by sale_date for performance - table is partitioned by date",
+    "NULL region_id indicates online sales with no physical region"
+  ],
+  "freshness": "T-1",
+  "row_count": 15000000,
+  "owner": "data-team@company.com",
+  "tags": ["sales", "revenue", "core"]
+}

@@ -1,0 +1,28 @@
+{
+  "datapoint_id": "proc_nightly_inventory_snapshot_001",
+  "type": "Process",
+  "name": "Nightly Inventory Snapshot",
+  "owner": "platform-data@example.com",
+  "tags": [
+    "grocery",
+    "inventory",
+    "pipeline"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "pipeline_execution",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "schedule": "0 1 * * *",
+  "data_freshness": "Daily by 01:30 local time",
+  "target_tables": [
+    "public.grocery_inventory_snapshots"
+  ],
+  "dependencies": [
+    "public.grocery_sales_transactions",
+    "public.grocery_purchase_orders"
+  ],
+  "sla": "Complete within 30 minutes",
+  "monitoring_url": "https://ops.example.com/pipelines/nightly-inventory"
+}

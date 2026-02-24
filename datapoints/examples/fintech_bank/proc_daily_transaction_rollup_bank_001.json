@@ -1,0 +1,28 @@
+{
+  "datapoint_id": "proc_daily_transaction_rollup_bank_001",
+  "type": "Process",
+  "name": "Daily Transaction Rollup",
+  "owner": "platform-data@example.com",
+  "tags": [
+    "fintech",
+    "transactions",
+    "pipeline"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "pipeline_execution",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "schedule": "30 1 * * *",
+  "data_freshness": "Daily by 02:00 local time",
+  "target_tables": [
+    "public.bank_transactions"
+  ],
+  "dependencies": [
+    "public.bank_accounts",
+    "public.bank_customers"
+  ],
+  "sla": "Complete within 20 minutes",
+  "monitoring_url": "https://ops.example.com/pipelines/fintech-daily-transaction-rollup"
+}
