@@ -16,7 +16,7 @@ DataChat lets you ask questions in plain English and get SQL, results, and clari
 
 - Current wedge: decision workflow system for finance teams.
 - Build model: finance workflow needs pull platform work (metadata ops, governance, traceability, and policy-safe agent execution).
-- Expansion rule: broaden beyond finance only after finance workflow KPIs in `docs/PRD.md` stay green.
+- Expansion rule: broaden beyond finance only after finance workflow quality bar in `docs/COMMUNITY_V0_1_SCOPE_LOCK.md` stays green.
 
 ---
 
@@ -182,9 +182,10 @@ See [`docs/API.md`](docs/API.md).
 - [`docs/API.md`](docs/API.md)
 - [`docs/CREDENTIALS_ONLY_MODE.md`](docs/CREDENTIALS_ONLY_MODE.md)
 - [`docs/MULTI_DATABASE.md`](docs/MULTI_DATABASE.md)
-- [`docs/LEVELS.md`](docs/LEVELS.md)
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/PRD.md`](docs/PRD.md)
+- [`docs/CAPABILITY_CONTRACT.md`](docs/CAPABILITY_CONTRACT.md)
+- [`docs/COMMUNITY_V0_1_SCOPE_LOCK.md`](docs/COMMUNITY_V0_1_SCOPE_LOCK.md)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 ---
 
@@ -197,6 +198,14 @@ ruff check .
 # Tests
 pytest -q
 ```
+
+---
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+Use label `needs-private-cherry-pick` for PRs that should be imported into the private `datachat` repo.
 
 ---
 
