@@ -1,0 +1,75 @@
+{
+  "datapoint_id": "table_grocery_products_001",
+  "type": "Schema",
+  "name": "Grocery Products",
+  "owner": "merchandising@example.com",
+  "tags": [
+    "grocery",
+    "products",
+    "catalog"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.grocery_products",
+  "schema": "public",
+  "business_purpose": "Product catalog containing SKU, category, pricing, and reorder controls.",
+  "key_columns": [
+    {
+      "name": "product_id",
+      "type": "INTEGER",
+      "business_meaning": "Unique product identifier",
+      "nullable": false
+    },
+    {
+      "name": "sku",
+      "type": "TEXT",
+      "business_meaning": "External stock keeping unit",
+      "nullable": false
+    },
+    {
+      "name": "category",
+      "type": "TEXT",
+      "business_meaning": "Product category for reporting",
+      "nullable": false
+    },
+    {
+      "name": "unit_cost",
+      "type": "NUMERIC(10,2)",
+      "business_meaning": "Per-unit purchase cost",
+      "nullable": false
+    },
+    {
+      "name": "unit_price",
+      "type": "NUMERIC(10,2)",
+      "business_meaning": "Shelf price before discounts",
+      "nullable": false
+    },
+    {
+      "name": "reorder_level",
+      "type": "INTEGER",
+      "business_meaning": "Minimum target stock level that triggers reorder review",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.grocery_suppliers",
+      "join_column": "supplier_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT category, COUNT(*) FROM grocery_products GROUP BY category",
+    "SELECT product_name, unit_cost, unit_price FROM grocery_products ORDER BY product_name"
+  ],
+  "gotchas": [
+    "Gross margin calculations should use transactional net price when available"
+  ],
+  "freshness": "Daily",
+  "row_count": 8
+}

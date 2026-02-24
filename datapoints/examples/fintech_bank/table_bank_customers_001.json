@@ -1,0 +1,56 @@
+{
+  "datapoint_id": "table_bank_customers_001",
+  "type": "Schema",
+  "name": "Bank Customers",
+  "owner": "retail-ops@example.com",
+  "tags": [
+    "fintech",
+    "customers",
+    "kyc"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.bank_customers",
+  "schema": "public",
+  "business_purpose": "Master customer registry used for onboarding, segmentation, and KYC compliance reporting.",
+  "key_columns": [
+    {
+      "name": "customer_id",
+      "type": "INTEGER",
+      "business_meaning": "Unique customer identifier",
+      "nullable": false
+    },
+    {
+      "name": "customer_code",
+      "type": "TEXT",
+      "business_meaning": "External customer code used in operations",
+      "nullable": false
+    },
+    {
+      "name": "segment",
+      "type": "TEXT",
+      "business_meaning": "Business segment such as retail or sme",
+      "nullable": false
+    },
+    {
+      "name": "kyc_status",
+      "type": "TEXT",
+      "business_meaning": "Compliance verification status",
+      "nullable": false
+    }
+  ],
+  "relationships": [],
+  "common_queries": [
+    "SELECT segment, COUNT(*) FROM bank_customers GROUP BY segment",
+    "SELECT kyc_status, COUNT(*) FROM bank_customers GROUP BY kyc_status"
+  ],
+  "gotchas": [
+    "Use customer_id for joins; customer_code is user-facing and may change"
+  ],
+  "freshness": "Daily",
+  "row_count": 4
+}

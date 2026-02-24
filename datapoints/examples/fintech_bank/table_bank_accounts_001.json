@@ -1,0 +1,69 @@
+{
+  "datapoint_id": "table_bank_accounts_001",
+  "type": "Schema",
+  "name": "Bank Accounts",
+  "owner": "retail-ops@example.com",
+  "tags": [
+    "fintech",
+    "accounts",
+    "balances"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.bank_accounts",
+  "schema": "public",
+  "business_purpose": "Customer account ledger holding account status, currency, and current balances.",
+  "key_columns": [
+    {
+      "name": "account_id",
+      "type": "INTEGER",
+      "business_meaning": "Internal account identifier",
+      "nullable": false
+    },
+    {
+      "name": "customer_id",
+      "type": "INTEGER",
+      "business_meaning": "Owner customer identifier",
+      "nullable": false
+    },
+    {
+      "name": "currency_code",
+      "type": "TEXT",
+      "business_meaning": "Account currency code",
+      "nullable": false
+    },
+    {
+      "name": "current_balance",
+      "type": "NUMERIC(14,2)",
+      "business_meaning": "Current available balance",
+      "nullable": false
+    },
+    {
+      "name": "status",
+      "type": "TEXT",
+      "business_meaning": "Account lifecycle status",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.bank_customers",
+      "join_column": "customer_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT status, COUNT(*) FROM bank_accounts GROUP BY status",
+    "SELECT currency_code, SUM(current_balance) FROM bank_accounts GROUP BY currency_code"
+  ],
+  "gotchas": [
+    "Balance is a current snapshot, not a daily history table"
+  ],
+  "freshness": "Near real-time",
+  "row_count": 6
+}

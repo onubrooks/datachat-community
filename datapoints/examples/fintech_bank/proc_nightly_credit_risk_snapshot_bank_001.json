@@ -1,0 +1,30 @@
+{
+  "datapoint_id": "proc_nightly_credit_risk_snapshot_bank_001",
+  "type": "Process",
+  "name": "Nightly Credit Risk Snapshot",
+  "owner": "platform-data@example.com",
+  "tags": [
+    "fintech",
+    "credit",
+    "risk",
+    "pipeline"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "pipeline_execution",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "schedule": "0 2 * * *",
+  "data_freshness": "Daily by 02:30 local time",
+  "target_tables": [
+    "public.bank_loans",
+    "public.bank_loan_payments"
+  ],
+  "dependencies": [
+    "public.bank_accounts",
+    "public.bank_customers"
+  ],
+  "sla": "Complete within 25 minutes",
+  "monitoring_url": "https://ops.example.com/pipelines/fintech-credit-risk-snapshot"
+}

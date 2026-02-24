@@ -1,0 +1,47 @@
+{
+  "datapoint_id": "table_users_001",
+  "type": "Schema",
+  "name": "Users Table",
+  "owner": "data-team@example.com",
+  "tags": ["demo", "users", "accounts"],
+  "metadata": {
+    "source": "demo-seed"
+  },
+  "table_name": "public.users",
+  "schema": "public",
+  "business_purpose": "Stores user account information for demo queries.",
+  "key_columns": [
+    {
+      "name": "id",
+      "type": "INTEGER",
+      "business_meaning": "Unique user identifier",
+      "nullable": false
+    },
+    {
+      "name": "email",
+      "type": "TEXT",
+      "business_meaning": "User email address",
+      "nullable": false
+    },
+    {
+      "name": "created_at",
+      "type": "TIMESTAMP",
+      "business_meaning": "Account creation timestamp",
+      "nullable": false
+    },
+    {
+      "name": "is_active",
+      "type": "BOOLEAN",
+      "business_meaning": "Whether the user is active",
+      "nullable": false
+    }
+  ],
+  "relationships": [],
+  "common_queries": [
+    "SELECT COUNT(*) FROM users",
+    "SELECT COUNT(*) FROM users WHERE is_active = true"
+  ],
+  "gotchas": [],
+  "freshness": "T-1",
+  "row_count": 3
+}

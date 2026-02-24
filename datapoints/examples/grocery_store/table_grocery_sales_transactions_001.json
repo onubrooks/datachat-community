@@ -1,0 +1,87 @@
+{
+  "datapoint_id": "table_grocery_sales_transactions_001",
+  "type": "Schema",
+  "name": "Sales Transactions",
+  "owner": "retail-analytics@example.com",
+  "tags": [
+    "grocery",
+    "sales",
+    "transactions"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.grocery_sales_transactions",
+  "schema": "public",
+  "business_purpose": "Transaction-level grocery sales used for revenue, margin, and basket performance analysis.",
+  "key_columns": [
+    {
+      "name": "txn_id",
+      "type": "INTEGER",
+      "business_meaning": "Unique transaction line identifier",
+      "nullable": false
+    },
+    {
+      "name": "business_date",
+      "type": "DATE",
+      "business_meaning": "Store-local business date for daily reporting",
+      "nullable": false
+    },
+    {
+      "name": "store_id",
+      "type": "INTEGER",
+      "business_meaning": "Store where sale occurred",
+      "nullable": false
+    },
+    {
+      "name": "product_id",
+      "type": "INTEGER",
+      "business_meaning": "Sold product",
+      "nullable": false
+    },
+    {
+      "name": "quantity",
+      "type": "INTEGER",
+      "business_meaning": "Units sold",
+      "nullable": false
+    },
+    {
+      "name": "discount_amount",
+      "type": "NUMERIC(10,2)",
+      "business_meaning": "Discount value applied at line level",
+      "nullable": false
+    },
+    {
+      "name": "total_amount",
+      "type": "NUMERIC(12,2)",
+      "business_meaning": "Net line total after discount",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.grocery_stores",
+      "join_column": "store_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    },
+    {
+      "target_table": "public.grocery_products",
+      "join_column": "product_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT business_date, SUM(total_amount) FROM grocery_sales_transactions GROUP BY business_date",
+    "SELECT store_id, SUM(total_amount) FROM grocery_sales_transactions GROUP BY store_id"
+  ],
+  "gotchas": [
+    "Use total_amount for net revenue; unit_price * quantity ignores discounts"
+  ],
+  "freshness": "Near real-time",
+  "row_count": 24
+}

@@ -1,0 +1,12 @@
+{
+  "datapoint_id": "proc_daily_etl_001",
+  "type": "Process",
+  "name": "Daily Sales ETL",
+  "schedule": "0 2 * * *",
+  "data_freshness": "T-1 (yesterday's data available by 3am UTC)",
+  "target_tables": ["analytics.fact_sales", "analytics.fact_sales_summary"],
+  "dependencies": ["raw.sales_events", "raw.payment_events"],
+  "sla": "Must complete by 3am UTC",
+  "owner": "data-eng@company.com",
+  "tags": ["etl", "batch", "critical"]
+}

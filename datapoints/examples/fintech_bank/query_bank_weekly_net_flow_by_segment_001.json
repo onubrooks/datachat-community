@@ -1,0 +1,45 @@
+{
+  "datapoint_id": "query_bank_weekly_net_flow_by_segment_001",
+  "type": "Query",
+  "name": "Weekly Deposits Withdrawals Net Flow by Segment",
+  "owner": "finance-analytics@example.com",
+  "tags": [
+    "fintech",
+    "deposits",
+    "withdrawals",
+    "net_flow",
+    "segment",
+    "weekly"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "weekly_segment_aggregation",
+    "exclusions": "Excludes pending, declined, and reversed transactions; includes posted transactions only.",
+    "confidence_notes": "Validated against seeded fintech schema join path bank_transactions -> bank_accounts -> bank_customers."
+  },
+  "sql_template": "WITH weekly_flows AS (\n    SELECT\n        DATE_TRUNC('week', bt.business_date)::date AS week_start,\n        bc.segment,\n        ROUND(SUM(CASE WHEN bt.direction = 'credit' THEN bt.amount ELSE 0 END)::numeric, 2) AS total_deposits,\n        ROUND(SUM(CASE WHEN bt.direction = 'debit' THEN bt.amount ELSE 0 END)::numeric, 2) AS total_withdrawals,\n        ROUND(SUM(CASE WHEN bt.direction = 'credit' THEN bt.amount ELSE -bt.amount END)::numeric, 2) AS net_flow\n    FROM public.bank_transactions bt\n    JOIN public.bank_accounts ba ON bt.account_id = ba.account_id\n    JOIN public.bank_customers bc ON ba.customer_id = bc.customer_id\n    WHERE bt.status = 'posted'\n      AND bt.business_date >= CURRENT_DATE - ({lookback_days} * INTERVAL '1 day')\n    GROUP BY 1, 2\n)\nSELECT\n    week_start,\n    segment,\n    total_deposits,\n    total_withdrawals,\n    net_flow\nFROM weekly_flows\nORDER BY week_start DESC, segment;",
+  "parameters": {
+    "lookback_days": {
+      "type": "integer",
+      "required": false,
+      "default": 56,
+      "description": "Lookback window in days."
+    }
+  },
+  "description": "Returns weekly deposits, withdrawals, and net flow by customer segment for the configured lookback period.",
+  "validation": {
+    "expected_columns": [
+      "week_start",
+      "segment",
+      "total_deposits",
+      "total_withdrawals",
+      "net_flow"
+    ],
+    "max_rows": 500
+  },
+  "related_tables": [
+    "public.bank_transactions",
+    "public.bank_accounts",
+    "public.bank_customers"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "datapoint_id": "metric_revenue_001",
+  "type": "Business",
+  "name": "Revenue",
+  "calculation": "SUM(fact_sales.amount) WHERE status = 'completed'",
+  "synonyms": ["sales", "income", "earnings", "total sales", "gmv"],
+  "business_rules": [
+    "Exclude refunds (status != 'refunded')",
+    "Convert to USD using daily exchange rate from dim_currency",
+    "Only include completed transactions"
+  ],
+  "related_tables": ["analytics.fact_sales", "dim_currency"],
+  "unit": "USD",
+  "owner": "finance@company.com",
+  "tags": ["revenue", "kpi", "finance"]
+}

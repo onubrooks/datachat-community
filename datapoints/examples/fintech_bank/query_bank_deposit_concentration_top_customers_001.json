@@ -1,0 +1,48 @@
+{
+  "datapoint_id": "query_bank_deposit_concentration_top_customers_001",
+  "type": "Query",
+  "name": "Top Customers by Deposit Concentration",
+  "owner": "treasury-analytics@example.com",
+  "tags": [
+    "fintech",
+    "deposits",
+    "concentration_risk",
+    "top_customers",
+    "liquidity"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "customer_balance_concentration_aggregation",
+    "exclusions": "Includes active and restricted accounts; excludes frozen accounts.",
+    "assumptions": "Uses current_balance as concentration basis and ranks by largest balances at query time.",
+    "methodology": "Calculates each customer's share of included balances using SUM(current_balance) over the ranked population.",
+    "caveat_templates": [
+      "Concentration risk is measured as current balance share and does not include withdrawal velocity stress.",
+      "Top-N concentration output omits the long tail outside the ranked customers."
+    ],
+    "confidence_notes": "Concentration percentages validated against current_balance snapshots in seeded account data."
+  },
+  "sql_template": "SELECT\n    bc.customer_code,\n    bc.segment,\n    ROUND(SUM(ba.current_balance)::numeric, 2) AS total_balance,\n    ROUND(\n        100.0 * SUM(ba.current_balance) / NULLIF(SUM(SUM(ba.current_balance)) OVER (), 0),\n        2\n    ) AS balance_share_pct\nFROM public.bank_accounts ba\nJOIN public.bank_customers bc ON ba.customer_id = bc.customer_id\nWHERE ba.status IN ('active', 'restricted')\nGROUP BY bc.customer_code, bc.segment\nORDER BY total_balance DESC\nLIMIT {top_n};",
+  "parameters": {
+    "top_n": {
+      "type": "integer",
+      "required": false,
+      "default": 10,
+      "description": "Number of customers returned in concentration ranking."
+    }
+  },
+  "description": "Ranks customers by balance share to highlight deposit concentration risk.",
+  "validation": {
+    "expected_columns": [
+      "customer_code",
+      "segment",
+      "total_balance",
+      "balance_share_pct"
+    ],
+    "max_rows": 100
+  },
+  "related_tables": [
+    "public.bank_accounts",
+    "public.bank_customers"
+  ]
+}

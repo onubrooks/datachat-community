@@ -1,0 +1,41 @@
+{
+  "datapoint_id": "query_bank_daily_failed_transaction_rate_001",
+  "type": "Query",
+  "name": "Daily Failed Transaction Rate Trend",
+  "owner": "risk-analytics@example.com",
+  "tags": [
+    "fintech",
+    "failed_transactions",
+    "trend",
+    "daily",
+    "operations_risk"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "daily_failure_rate_aggregation",
+    "exclusions": "Transactions with status pending are included in denominator but not counted as failures.",
+    "confidence_notes": "Failure rate checks validated against deterministic seeded status patterns."
+  },
+  "sql_template": "SELECT\n    bt.business_date,\n    COUNT(*) AS total_transactions,\n    COUNT(*) FILTER (WHERE bt.status = 'declined') AS failed_transactions,\n    ROUND(\n        100.0 * COUNT(*) FILTER (WHERE bt.status = 'declined') / NULLIF(COUNT(*), 0),\n        2\n    ) AS failed_rate_pct\nFROM public.bank_transactions bt\nWHERE bt.business_date >= CURRENT_DATE - ({lookback_days} * INTERVAL '1 day')\nGROUP BY bt.business_date\nORDER BY bt.business_date DESC;",
+  "parameters": {
+    "lookback_days": {
+      "type": "integer",
+      "required": false,
+      "default": 30,
+      "description": "Number of days included in trend."
+    }
+  },
+  "description": "Shows daily failed-transaction rate trend over the selected lookback period.",
+  "validation": {
+    "expected_columns": [
+      "business_date",
+      "total_transactions",
+      "failed_transactions",
+      "failed_rate_pct"
+    ],
+    "max_rows": 366
+  },
+  "related_tables": [
+    "public.bank_transactions"
+  ]
+}

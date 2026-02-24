@@ -1,0 +1,36 @@
+{
+  "datapoint_id": "metric_total_revenue_grocery_001",
+  "type": "Business",
+  "name": "Total Grocery Revenue",
+  "owner": "finance-analytics@example.com",
+  "tags": [
+    "grocery",
+    "revenue",
+    "kpi"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
+  },
+  "calculation": "SUM(grocery_sales_transactions.total_amount)",
+  "synonyms": [
+    "grocery revenue",
+    "net sales",
+    "store revenue",
+    "total sales"
+  ],
+  "business_rules": [
+    "Use total_amount for revenue because discounts are already netted",
+    "Use business_date for daily/weekly reporting",
+    "Aggregate by store_id for store-level revenue"
+  ],
+  "related_tables": [
+    "public.grocery_sales_transactions",
+    "public.grocery_stores"
+  ],
+  "unit": "USD",
+  "aggregation": "SUM"
+}

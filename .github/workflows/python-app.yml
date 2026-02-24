@@ -1,0 +1,60 @@
+# This workflow will install Python dependencies, run tests and lint with a single version of Python
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Python application
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install --group dev
+
+      - name: Lint with ruff
+        run: |
+          ruff check .
+
+      - name: Lint DataPoint contracts
+        run: |
+          python scripts/lint_datapoints.py --path datapoints/examples --recursive
+
+      - name: Test with pytest
+        run: |
+          pytest
+
+      - name: Phase 1 KPI gate (CI)
+        run: |
+          python scripts/phase1_kpi_gate.py \
+            --mode ci \
+            --report-json reports/phase1_ci_gate.json \
+            --report-md reports/phase1_ci_gate.md
+
+      - name: Upload Phase 1 KPI report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-kpi-ci-report
+          path: |
+            reports/phase1_ci_gate.json
+            reports/phase1_ci_gate.md

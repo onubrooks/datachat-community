@@ -1,0 +1,69 @@
+{
+  "datapoint_id": "table_bank_cards_001",
+  "type": "Schema",
+  "name": "Bank Cards",
+  "owner": "card-ops@example.com",
+  "tags": [
+    "fintech",
+    "cards",
+    "risk"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.bank_cards",
+  "schema": "public",
+  "business_purpose": "Card inventory and status tracking for issued customer debit and credit cards.",
+  "key_columns": [
+    {
+      "name": "card_id",
+      "type": "INTEGER",
+      "business_meaning": "Card identifier",
+      "nullable": false
+    },
+    {
+      "name": "customer_id",
+      "type": "INTEGER",
+      "business_meaning": "Card holder customer identifier",
+      "nullable": false
+    },
+    {
+      "name": "account_id",
+      "type": "INTEGER",
+      "business_meaning": "Linked settlement account",
+      "nullable": false
+    },
+    {
+      "name": "status",
+      "type": "TEXT",
+      "business_meaning": "Card status such as active or blocked",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.bank_customers",
+      "join_column": "customer_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    },
+    {
+      "target_table": "public.bank_accounts",
+      "join_column": "account_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT status, COUNT(*) FROM bank_cards GROUP BY status",
+    "SELECT network, COUNT(*) FROM bank_cards GROUP BY network"
+  ],
+  "gotchas": [
+    "Blocked cards can still have historical transactions"
+  ],
+  "freshness": "Daily",
+  "row_count": 4
+}

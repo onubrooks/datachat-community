@@ -1,0 +1,75 @@
+{
+  "datapoint_id": "table_grocery_inventory_snapshots_001",
+  "type": "Schema",
+  "name": "Inventory Snapshots",
+  "owner": "inventory-control@example.com",
+  "tags": [
+    "grocery",
+    "inventory",
+    "snapshot"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.grocery_inventory_snapshots",
+  "schema": "public",
+  "business_purpose": "Daily stock-on-hand snapshot by store and product for stockout and inventory health analysis.",
+  "key_columns": [
+    {
+      "name": "snapshot_date",
+      "type": "DATE",
+      "business_meaning": "Date of inventory snapshot",
+      "nullable": false
+    },
+    {
+      "name": "store_id",
+      "type": "INTEGER",
+      "business_meaning": "Store where stock is measured",
+      "nullable": false
+    },
+    {
+      "name": "product_id",
+      "type": "INTEGER",
+      "business_meaning": "Product being measured",
+      "nullable": false
+    },
+    {
+      "name": "on_hand_qty",
+      "type": "INTEGER",
+      "business_meaning": "Units physically available",
+      "nullable": false
+    },
+    {
+      "name": "reserved_qty",
+      "type": "INTEGER",
+      "business_meaning": "Units reserved and not sellable immediately",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.grocery_stores",
+      "join_column": "store_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    },
+    {
+      "target_table": "public.grocery_products",
+      "join_column": "product_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT snapshot_date, SUM(on_hand_qty) FROM grocery_inventory_snapshots GROUP BY snapshot_date",
+    "SELECT store_id, product_id, on_hand_qty FROM grocery_inventory_snapshots WHERE snapshot_date = CURRENT_DATE"
+  ],
+  "gotchas": [
+    "Stockout checks should use on_hand_qty - reserved_qty"
+  ],
+  "freshness": "Daily by 01:30 local",
+  "row_count": 16
+}

@@ -1,0 +1,83 @@
+{
+  "phase": "phase1-core-runtime",
+  "ci_checks": [
+    {
+      "name": "core-api-parity",
+      "command": "pytest -q tests/unit/api/test_chat.py tests/unit/api/test_databases.py tests/unit/api/test_tools.py tests/unit/api/test_database_context.py"
+    },
+    {
+      "name": "deterministic-mysql-summaries",
+      "command": "pytest -q tests/unit/agents/test_executor.py -k information_schema"
+    },
+    {
+      "name": "connection-type-validation",
+      "command": "pytest -q tests/unit/database/test_manager.py -k mismatch"
+    }
+  ],
+  "release_checks": {
+    "intent_avg_latency_ms_max": 12000.0,
+    "intent_avg_llm_calls_max": 4.0,
+    "intent_source_accuracy_min": 0.8,
+    "intent_clarification_match_min": 0.75,
+    "smoke_checks": [
+      {
+        "name": "health",
+        "path": "/api/v1/health",
+        "expect_status": 200,
+        "require_json_keys": ["status", "version"]
+      },
+      {
+        "name": "ready",
+        "path": "/api/v1/ready",
+        "expect_status": 200,
+        "require_json_keys": ["status", "checks"]
+      },
+      {
+        "name": "system-status",
+        "path": "/api/v1/system/status",
+        "expect_status": 200,
+        "require_json_keys": ["has_databases", "has_datapoints", "setup_required"]
+      }
+    ],
+    "eval_runs": [
+      {
+        "name": "intent-credentials",
+        "mode": "intent",
+        "dataset": "eval/intent_credentials.json"
+      },
+      {
+        "name": "catalog-mysql",
+        "mode": "catalog",
+        "dataset": "eval/catalog/mysql_credentials.json",
+        "required_database_type": "mysql",
+        "on_missing": "skip",
+        "thresholds": {
+          "min_sql_match_rate": 0.7,
+          "min_source_match_rate": 0.8,
+          "min_clarification_match_rate": 0.8
+        }
+      },
+      {
+        "name": "route-credentials",
+        "mode": "route",
+        "dataset": "eval/routes_credentials.json",
+        "thresholds": {
+          "min_route_match_rate": 0.8,
+          "min_source_match_rate": 0.8
+        }
+      },
+      {
+        "name": "compiler-grocery",
+        "mode": "compiler",
+        "dataset": "eval/compiler/grocery_query_compiler.json",
+        "required_database_type": "postgresql",
+        "on_missing": "skip",
+        "thresholds": {
+          "min_compiler_table_match_rate": 0.8,
+          "min_compiler_path_match_rate": 0.8,
+          "min_source_match_rate": 0.5
+        }
+      }
+    ]
+  }
+}

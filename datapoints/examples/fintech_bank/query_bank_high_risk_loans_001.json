@@ -1,0 +1,48 @@
+{
+  "datapoint_id": "query_bank_high_risk_loans_001",
+  "type": "Query",
+  "name": "Highest Risk Loans by Delinquency and Payment Stress",
+  "owner": "credit-risk@example.com",
+  "tags": [
+    "fintech",
+    "loans",
+    "delinquency",
+    "risk",
+    "collections"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "loan_level_risk_ranking",
+    "exclusions": "Closed loans are excluded; risk score is a deterministic demo heuristic.",
+    "confidence_notes": "Validated using days_past_due and payment status behavior in seeded loan/payment data."
+  },
+  "sql_template": "SELECT\n    l.loan_id,\n    bc.customer_code,\n    bc.segment,\n    l.loan_type,\n    ROUND(l.principal_amount::numeric, 2) AS principal_amount,\n    l.days_past_due,\n    MAX(lp.payment_date) AS last_payment_date,\n    COALESCE(MAX(CASE WHEN lp.status IN ('missed', 'partial') THEN lp.payment_date END), NULL) AS last_stressed_payment_date,\n    (\n        CASE\n            WHEN l.days_past_due >= 90 THEN 100\n            WHEN l.days_past_due >= 60 THEN 80\n            WHEN l.days_past_due >= 30 THEN 55\n            ELSE 20\n        END\n        + CASE\n            WHEN l.status = 'non_performing' THEN 20\n            WHEN l.status = 'delinquent' THEN 10\n            ELSE 0\n        END\n        + CASE\n            WHEN COUNT(*) FILTER (WHERE lp.status = 'missed') > 0 THEN 12\n            WHEN COUNT(*) FILTER (WHERE lp.status = 'partial') > 1 THEN 6\n            ELSE 0\n        END\n    ) AS risk_score\nFROM public.bank_loans l\nJOIN public.bank_customers bc ON l.customer_id = bc.customer_id\nLEFT JOIN public.bank_loan_payments lp ON l.loan_id = lp.loan_id\nWHERE l.status IN ('active', 'delinquent', 'non_performing')\nGROUP BY\n    l.loan_id,\n    bc.customer_code,\n    bc.segment,\n    l.loan_type,\n    l.principal_amount,\n    l.days_past_due,\n    l.status\nORDER BY risk_score DESC, l.days_past_due DESC, principal_amount DESC\nLIMIT {top_n};",
+  "parameters": {
+    "top_n": {
+      "type": "integer",
+      "required": false,
+      "default": 10,
+      "description": "Number of high-risk loans to return."
+    }
+  },
+  "description": "Ranks loans by a deterministic risk score combining delinquency severity and stressed payment behavior.",
+  "validation": {
+    "expected_columns": [
+      "loan_id",
+      "customer_code",
+      "segment",
+      "loan_type",
+      "principal_amount",
+      "days_past_due",
+      "last_payment_date",
+      "last_stressed_payment_date",
+      "risk_score"
+    ],
+    "max_rows": 100
+  },
+  "related_tables": [
+    "public.bank_loans",
+    "public.bank_loan_payments",
+    "public.bank_customers"
+  ]
+}

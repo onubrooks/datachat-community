@@ -1,0 +1,26 @@
+{
+  "datapoint_id": "metric_gross_margin_definition_001",
+  "type": "Business",
+  "name": "Gross Margin",
+  "owner": "data-governance@datachat.ai",
+  "tags": ["global", "definition", "finance"],
+  "metadata": {
+    "scope": "global",
+    "grain": "metric_definition",
+    "exclusions": "Exclude taxes and financing costs unless explicitly included.",
+    "confidence_notes": "Definition-only DataPoint; SQL implementation may vary by source system.",
+    "freshness": "On change"
+  },
+  "calculation": "gross_margin = (revenue - cost_of_goods_sold) / revenue",
+  "synonyms": [
+    "margin",
+    "gross profit margin"
+  ],
+  "business_rules": [
+    "When revenue is zero, return null to avoid divide-by-zero.",
+    "COGS should include direct production or procurement costs only."
+  ],
+  "related_tables": [],
+  "unit": "percentage",
+  "aggregation": "CUSTOM"
+}

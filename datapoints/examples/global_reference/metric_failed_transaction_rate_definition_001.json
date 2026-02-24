@@ -1,0 +1,27 @@
+{
+  "datapoint_id": "metric_failed_transaction_rate_definition_001",
+  "type": "Business",
+  "name": "Failed Transaction Rate",
+  "owner": "data-governance@datachat.ai",
+  "tags": ["global", "definition", "quality"],
+  "metadata": {
+    "scope": "global",
+    "grain": "metric_definition",
+    "exclusions": "Exclude transactions that are pending or cancelled before processing.",
+    "confidence_notes": "Definition-only DataPoint for cross-database consistency.",
+    "freshness": "On change"
+  },
+  "calculation": "failed_transaction_rate = failed_transactions / total_transactions",
+  "synonyms": [
+    "transaction failure rate",
+    "payment failure rate",
+    "failed tx rate"
+  ],
+  "business_rules": [
+    "Numerator counts transactions with terminal status = failed.",
+    "Denominator counts all attempted transactions in the same period."
+  ],
+  "related_tables": [],
+  "unit": "percentage",
+  "aggregation": "CUSTOM"
+}

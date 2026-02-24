@@ -1,0 +1,34 @@
+{
+  "datapoint_id": "metric_failed_transaction_rate_bank_001",
+  "type": "Business",
+  "name": "Failed Transaction Rate",
+  "owner": "payments-ops@example.com",
+  "tags": [
+    "fintech",
+    "payments",
+    "reliability"
+  ],
+  "metadata": {
+    "source": "fintech-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
+  },
+  "calculation": "COUNT(*) FILTER (WHERE bank_transactions.status IN ('declined', 'reversed')) / NULLIF(COUNT(*), 0)",
+  "synonyms": [
+    "transaction failure rate",
+    "decline rate",
+    "payment failure rate"
+  ],
+  "business_rules": [
+    "Treat declined and reversed as failures",
+    "Use total transactions as denominator",
+    "Track by business_date for trend monitoring"
+  ],
+  "related_tables": [
+    "public.bank_transactions"
+  ],
+  "unit": "ratio",
+  "aggregation": "CUSTOM"
+}

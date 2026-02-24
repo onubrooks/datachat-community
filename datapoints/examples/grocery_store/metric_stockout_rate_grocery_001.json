@@ -1,0 +1,36 @@
+{
+  "datapoint_id": "metric_stockout_rate_grocery_001",
+  "type": "Business",
+  "name": "Stockout Rate",
+  "owner": "inventory-control@example.com",
+  "tags": [
+    "grocery",
+    "inventory",
+    "stockout"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "metric_aggregation",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting.",
+    "freshness": "Daily"
+  },
+  "calculation": "COUNT(*) FILTER (WHERE on_hand_qty - reserved_qty <= 0) / COUNT(*)",
+  "synonyms": [
+    "out of stock rate",
+    "oos rate",
+    "stock-out percentage"
+  ],
+  "business_rules": [
+    "Use latest inventory snapshot per store and product",
+    "Consider reserved_qty not sellable",
+    "Rate should be monitored by category and store"
+  ],
+  "related_tables": [
+    "public.grocery_inventory_snapshots",
+    "public.grocery_products",
+    "public.grocery_stores"
+  ],
+  "unit": "ratio",
+  "aggregation": "CUSTOM"
+}

@@ -1,0 +1,56 @@
+tools:
+  # Schema-exact answer from DataPoints only.
+  # Arguments example: {"query": "What does revenue mean here?"}
+  - name: context_answer
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30
+
+  # End-to-end SQL generation + validation + execution.
+  # Arguments example: {"query": "Total orders this month"}
+  - name: run_sql
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 60
+
+  # Enumerate tables (optional schema filter).
+  # Arguments example: {"schema": "public"}
+  - name: list_tables
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30
+
+  # List typed columns for one table.
+  # Arguments example: {"table": "orders", "schema": "public"}
+  - name: list_columns
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30
+
+  # Sample rows from a table.
+  # Arguments example: {"table": "orders", "schema": "public", "limit": 5}
+  - name: get_table_sample
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30
+
+  # Long-running bootstrap helper (approval required).
+  # Arguments example:
+  # {
+  #   "connection_id": "uuid",
+  #   "depth": "metrics_basic",
+  #   "batch_size": 10,
+  #   "max_tables": 50,
+  #   "sample_size": 100
+  # }
+  - name: profile_and_generate_datapoints
+    enabled: true
+    requires_approval: true
+    max_execution_time_seconds: 300
+
+  # DataPoint quality scanner for managed files.
+  # Arguments example: {"limit": 20}
+  - name: datapoint_quality_report
+    enabled: true
+    requires_approval: false
+    max_execution_time_seconds: 30

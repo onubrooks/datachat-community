@@ -1,0 +1,93 @@
+{
+  "datapoint_id": "table_grocery_purchase_orders_001",
+  "type": "Schema",
+  "name": "Purchase Orders",
+  "owner": "procurement@example.com",
+  "tags": [
+    "grocery",
+    "procurement",
+    "purchase-orders"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.grocery_purchase_orders",
+  "schema": "public",
+  "business_purpose": "Inbound purchasing records used to track replenishment status and supplier delivery performance.",
+  "key_columns": [
+    {
+      "name": "po_id",
+      "type": "INTEGER",
+      "business_meaning": "Purchase order identifier",
+      "nullable": false
+    },
+    {
+      "name": "supplier_id",
+      "type": "INTEGER",
+      "business_meaning": "Supplier receiving the purchase order",
+      "nullable": false
+    },
+    {
+      "name": "store_id",
+      "type": "INTEGER",
+      "business_meaning": "Store requesting inventory",
+      "nullable": false
+    },
+    {
+      "name": "product_id",
+      "type": "INTEGER",
+      "business_meaning": "Product being ordered",
+      "nullable": false
+    },
+    {
+      "name": "ordered_qty",
+      "type": "INTEGER",
+      "business_meaning": "Units ordered",
+      "nullable": false
+    },
+    {
+      "name": "received_qty",
+      "type": "INTEGER",
+      "business_meaning": "Units physically received",
+      "nullable": true
+    },
+    {
+      "name": "status",
+      "type": "TEXT",
+      "business_meaning": "Workflow status such as submitted, in_transit, partial, or received",
+      "nullable": false
+    }
+  ],
+  "relationships": [
+    {
+      "target_table": "public.grocery_suppliers",
+      "join_column": "supplier_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    },
+    {
+      "target_table": "public.grocery_stores",
+      "join_column": "store_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    },
+    {
+      "target_table": "public.grocery_products",
+      "join_column": "product_id",
+      "cardinality": "N:1",
+      "relationship_type": "foreign_key"
+    }
+  ],
+  "common_queries": [
+    "SELECT status, COUNT(*) FROM grocery_purchase_orders GROUP BY status",
+    "SELECT supplier_id, AVG(received_at - ordered_at) FROM grocery_purchase_orders WHERE received_at IS NOT NULL GROUP BY supplier_id"
+  ],
+  "gotchas": [
+    "In-transit orders have NULL received_qty and should be excluded from received metrics"
+  ],
+  "freshness": "Hourly",
+  "row_count": 8
+}

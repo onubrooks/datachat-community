@@ -1,0 +1,56 @@
+{
+  "datapoint_id": "table_grocery_stores_001",
+  "type": "Schema",
+  "name": "Grocery Stores",
+  "owner": "ops-data@example.com",
+  "tags": [
+    "grocery",
+    "stores",
+    "dimension"
+  ],
+  "metadata": {
+    "source": "grocery-seed",
+    "grain": "row_level",
+    "exclusions": "No known exclusions beyond documented table/model constraints.",
+    "confidence_notes": "Validated against seeded demo dataset; verify against production policies before external reporting."
+  },
+  "table_name": "public.grocery_stores",
+  "schema": "public",
+  "business_purpose": "Master list of store locations used for sales, inventory, and procurement analysis.",
+  "key_columns": [
+    {
+      "name": "store_id",
+      "type": "INTEGER",
+      "business_meaning": "Unique identifier for each grocery store",
+      "nullable": false
+    },
+    {
+      "name": "store_code",
+      "type": "TEXT",
+      "business_meaning": "Human-friendly store code used in operations",
+      "nullable": false
+    },
+    {
+      "name": "store_name",
+      "type": "TEXT",
+      "business_meaning": "Display name of the store",
+      "nullable": false
+    },
+    {
+      "name": "region",
+      "type": "TEXT",
+      "business_meaning": "Geographic region used for regional rollups",
+      "nullable": false
+    }
+  ],
+  "relationships": [],
+  "common_queries": [
+    "SELECT region, COUNT(*) FROM grocery_stores GROUP BY region",
+    "SELECT store_name FROM grocery_stores ORDER BY store_name"
+  ],
+  "gotchas": [
+    "Use store_id for joins; store_name can change over time"
+  ],
+  "freshness": "Monthly",
+  "row_count": 3
+}
