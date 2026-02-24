@@ -4,7 +4,10 @@
 |---|---|
 | SQL editor mode | Included |
 | NL -> SQL querying | Included |
-| Advanced dynamic harness/tool-loop | Not included |
+| Current reliable harness/runtime path | Included |
+| Onboarding wizard (UI + CLI) | Included |
+| Managed DataPoint generation/editor/review | Included |
 | Proprietary workflow packs | Not included |
-| Enterprise governance automation | Not included |
+| Enterprise-only automation policy layers | Not included |
+| Internal roadmap/specs/eval artifacts | Not included |
 
