@@ -1,36 +1,142 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Database, Loader2, PanelRightClose, PanelRightOpen, Table2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Database,
+  FileText,
+  Loader2,
+  PanelRightClose,
+  PanelRightOpen,
+  Table2,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DatabaseSchemaTable } from "@/lib/api";
 
+interface MetadataExplorerItem {
+  id: string;
+  name: string;
+  type: string;
+  status: "pending" | "approved" | "managed";
+  confidence?: number | null;
+  reviewNote?: string | null;
+  sourceTier?: string | null;
+  sourcePath?: string | null;
+}
+
 interface SchemaExplorerSidebarProps {
   isOpen: boolean;
+  explorerMode: "schema" | "metadata";
   schemaSearch: string;
+  metadataSearch: string;
   schemaLoading: boolean;
+  metadataLoading: boolean;
   schemaError: string | null;
+  metadataError: string | null;
   filteredSchemaTables: DatabaseSchemaTable[];
+  pendingMetadataItems: MetadataExplorerItem[];
+  approvedMetadataItems: MetadataExplorerItem[];
+  managedMetadataItems: MetadataExplorerItem[];
   selectedSchemaTable: string | null;
   onToggle: () => void;
+  onExplorerModeChange: (mode: "schema" | "metadata") => void;
   onSearchChange: (value: string) => void;
+  onMetadataSearchChange: (value: string) => void;
   onSelectTable: (fullName: string) => void;
   onUseTable: (fullName: string) => void;
 }
 
 export function SchemaExplorerSidebar({
   isOpen,
+  explorerMode,
   schemaSearch,
+  metadataSearch,
   schemaLoading,
+  metadataLoading,
   schemaError,
+  metadataError,
   filteredSchemaTables,
+  pendingMetadataItems,
+  approvedMetadataItems,
+  managedMetadataItems,
   selectedSchemaTable,
   onToggle,
+  onExplorerModeChange,
   onSearchChange,
+  onMetadataSearchChange,
   onSelectTable,
   onUseTable,
 }: SchemaExplorerSidebarProps) {
+  const statusBadgeClass = (status: MetadataExplorerItem["status"]) => {
+    if (status === "pending") {
+      return "bg-amber-100 text-amber-900";
+    }
+    if (status === "approved") {
+      return "bg-emerald-100 text-emerald-900";
+    }
+    return "bg-blue-100 text-blue-900";
+  };
+
+  const renderMetadataSection = (
+    title: string,
+    items: MetadataExplorerItem[],
+    emptyText: string
+  ) => (
+    <section className="rounded border border-border bg-background p-2">
+      <div className="mb-2 text-[11px] font-semibold text-foreground">
+        {title} ({items.length})
+      </div>
+      {items.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">{emptyText}</p>
+      ) : (
+        <ul className="space-y-2">
+          {items.map((item, index) => (
+            <li
+              key={`${item.id}-${item.status}-${index}`}
+              className="rounded border border-border/70 bg-muted/20 p-2"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-[11px] font-medium text-foreground">
+                    {item.name}
+                  </div>
+                  <div className="truncate text-[10px] text-muted-foreground">
+                    {item.type} · {item.id}
+                  </div>
+                </div>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${statusBadgeClass(
+                    item.status
+                  )}`}
+                >
+                  {item.status}
+                </span>
+              </div>
+              <div className="mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+                {typeof item.confidence === "number" && (
+                  <div>Confidence: {item.confidence.toFixed(2)}</div>
+                )}
+                {item.sourceTier && <div>Source tier: {item.sourceTier}</div>}
+                {item.sourcePath && (
+                  <div className="truncate" title={item.sourcePath}>
+                    Source path: {item.sourcePath}
+                  </div>
+                )}
+                {item.reviewNote && (
+                  <div className="truncate" title={item.reviewNote}>
+                    Review: {item.reviewNote}
+                  </div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+
   return (
     <aside
       className={`hidden border-l border-border/70 bg-muted/30 transition-all duration-200 xl:flex xl:flex-col ${
@@ -48,103 +154,179 @@ export function SchemaExplorerSidebar({
         >
           {isOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
         </Button>
-        {isOpen && <div className="text-xs font-medium">Schema Explorer</div>}
+        {isOpen && <div className="text-xs font-medium">Explorer</div>}
       </div>
       {isOpen ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="border-b p-2">
-            <Input
-              value={schemaSearch}
-              onChange={(event) => onSearchChange(event.target.value)}
-              placeholder="Search table or column..."
-              className="h-8 text-xs"
-              aria-label="Search schema tables and columns"
-            />
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {schemaLoading && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Loading schema...
-              </div>
-            )}
-            {!schemaLoading && schemaError && (
-              <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
-                {schemaError}
-              </div>
-            )}
-            {!schemaLoading && !schemaError && filteredSchemaTables.length === 0 && (
-              <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
-                No tables matched your search.
-              </div>
-            )}
-            <div className="space-y-2">
-              {filteredSchemaTables.map((table) => {
-                const fullName = `${table.schema_name}.${table.table_name}`;
-                const isSelected = selectedSchemaTable === fullName;
-                return (
-                  <details key={fullName} className="rounded border border-border bg-background">
-                    <summary
-                      className={`cursor-pointer list-none px-2 py-2 text-xs ${
-                        isSelected ? "bg-primary/5" : ""
-                      }`}
-                      aria-label={`Toggle schema table ${fullName}`}
-                      onClick={() => onSelectTable(fullName)}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="truncate font-medium">{fullName}</div>
-                          <div className="text-[11px] text-muted-foreground">
-                            {table.table_type}
-                            {typeof table.row_count === "number"
-                              ? ` · ~${table.row_count} rows`
-                              : ""}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1 text-muted-foreground">
-                          <ChevronDown size={12} />
-                          <ChevronRight size={12} />
-                        </div>
-                      </div>
-                    </summary>
-                    <div className="border-t px-2 py-2">
-                      <button
-                        type="button"
-                        className="mb-2 inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] hover:bg-muted"
-                        aria-label={`Use table ${fullName} in query`}
-                        onClick={() => onUseTable(fullName)}
-                      >
-                        <Table2 size={12} />
-                        Use In Query
-                      </button>
-                      <ul className="space-y-1 text-[11px]">
-                        {table.columns.map((column) => (
-                          <li key={`${fullName}.${column.name}`} className="flex flex-wrap gap-1">
-                            <span className="font-medium">{column.name}</span>
-                            <span className="text-muted-foreground">({column.data_type})</span>
-                            {column.is_primary_key && (
-                              <span className="rounded bg-blue-100 px-1 text-[10px] text-blue-800">
-                                PK
-                              </span>
-                            )}
-                            {column.is_foreign_key && (
-                              <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-900">
-                                FK
-                              </span>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </details>
-                );
-              })}
+          <div className="border-b px-2 py-2">
+            <div className="grid grid-cols-2 gap-1 rounded-md bg-muted p-1">
+              <button
+                type="button"
+                onClick={() => onExplorerModeChange("schema")}
+                className={`rounded px-2 py-1 text-xs font-medium transition ${
+                  explorerMode === "schema"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:bg-background/70"
+                }`}
+                aria-label="Show schema explorer"
+              >
+                Schema
+              </button>
+              <button
+                type="button"
+                onClick={() => onExplorerModeChange("metadata")}
+                className={`rounded px-2 py-1 text-xs font-medium transition ${
+                  explorerMode === "metadata"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:bg-background/70"
+                }`}
+                aria-label="Show metadata explorer"
+              >
+                Metadata
+              </button>
             </div>
           </div>
+          {explorerMode === "schema" ? (
+            <>
+              <div className="border-b p-2">
+                <Input
+                  value={schemaSearch}
+                  onChange={(event) => onSearchChange(event.target.value)}
+                  placeholder="Search table or column..."
+                  className="h-8 text-xs"
+                  aria-label="Search schema tables and columns"
+                />
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                {schemaLoading && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Loading schema...
+                  </div>
+                )}
+                {!schemaLoading && schemaError && (
+                  <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
+                    {schemaError}
+                  </div>
+                )}
+                {!schemaLoading && !schemaError && filteredSchemaTables.length === 0 && (
+                  <div className="rounded border border-dashed p-3 text-xs text-muted-foreground">
+                    No tables matched your search.
+                  </div>
+                )}
+                <div className="space-y-2">
+                  {filteredSchemaTables.map((table) => {
+                    const fullName = `${table.schema_name}.${table.table_name}`;
+                    const isSelected = selectedSchemaTable === fullName;
+                    return (
+                      <details key={fullName} className="rounded border border-border bg-background">
+                        <summary
+                          className={`cursor-pointer list-none px-2 py-2 text-xs ${
+                            isSelected ? "bg-primary/5" : ""
+                          }`}
+                          aria-label={`Toggle schema table ${fullName}`}
+                          onClick={() => onSelectTable(fullName)}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium">{fullName}</div>
+                              <div className="text-[11px] text-muted-foreground">
+                                {table.table_type}
+                                {typeof table.row_count === "number"
+                                  ? ` · ~${table.row_count} rows`
+                                  : ""}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 text-muted-foreground">
+                              <ChevronDown size={12} />
+                              <ChevronRight size={12} />
+                            </div>
+                          </div>
+                        </summary>
+                        <div className="border-t px-2 py-2">
+                          <button
+                            type="button"
+                            className="mb-2 inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] hover:bg-muted"
+                            aria-label={`Use table ${fullName} in query`}
+                            onClick={() => onUseTable(fullName)}
+                          >
+                            <Table2 size={12} />
+                            Use In Query
+                          </button>
+                          <ul className="space-y-1 text-[11px]">
+                            {table.columns.map((column) => (
+                              <li key={`${fullName}.${column.name}`} className="flex flex-wrap gap-1">
+                                <span className="font-medium">{column.name}</span>
+                                <span className="text-muted-foreground">({column.data_type})</span>
+                                {column.is_primary_key && (
+                                  <span className="rounded bg-blue-100 px-1 text-[10px] text-blue-800">
+                                    PK
+                                  </span>
+                                )}
+                                {column.is_foreign_key && (
+                                  <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-900">
+                                    FK
+                                  </span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </details>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="border-b p-2">
+                <Input
+                  value={metadataSearch}
+                  onChange={(event) => onMetadataSearchChange(event.target.value)}
+                  placeholder="Search datapoint id, name, or type..."
+                  className="h-8 text-xs"
+                  aria-label="Search generated and managed metadata"
+                />
+              </div>
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+                {metadataLoading && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Loading metadata...
+                  </div>
+                )}
+                {!metadataLoading && metadataError && (
+                  <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
+                    {metadataError}
+                  </div>
+                )}
+                {!metadataLoading && !metadataError && (
+                  <>
+                    {renderMetadataSection(
+                      "Generated (Pending)",
+                      pendingMetadataItems,
+                      "No pending generated DataPoints for this context."
+                    )}
+                    {renderMetadataSection(
+                      "Generated (Approved)",
+                      approvedMetadataItems,
+                      "No approved generated DataPoints for this context."
+                    )}
+                    {renderMetadataSection(
+                      "Managed (Active)",
+                      managedMetadataItems,
+                      "No active managed DataPoints matched your filters."
+                    )}
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
       ) : (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
-          <Database size={16} />
+          {explorerMode === "metadata" ? <FileText size={16} /> : <Database size={16} />}
         </div>
       )}
     </aside>

@@ -33,7 +33,11 @@ In another terminal:
 datachat ask "list tables"
 ```
 
-If this works, continue with the detailed setup below.
+Alternative setup path:
+- keep provider keys in `.env`, then run `datachat onboarding wizard` to guide DB setup
+- or use the UI onboarding flow in `/databases`
+
+If this succeeds, continue with the full guide below.
 
 ---
 

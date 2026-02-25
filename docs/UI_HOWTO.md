@@ -39,12 +39,10 @@ In the chat header you can:
 
 1. Select **Target database**.
 2. Select **Workflow mode** (`Auto` or `Finance Brief v1`).
-3. Start a **New** conversation.
-4. Open **Shortcuts** reference.
+3. Start a **New** conversation (plus button).
+4. Open **Shortcuts** reference (keyboard icon).
 5. Open **Settings**.
 6. Open **Manage DataPoints**.
-7. Clear current chat.
-8. Toggle left/right sidebars.
 
 ---
 
@@ -123,12 +121,13 @@ Storage note:
 
 ---
 
-## 10. Use Schema Explorer Sidebar
+## 10. Use Schema + Metadata Explorer Sidebar
 
 On the right sidebar:
-1. Search tables/columns.
-2. Expand a table to inspect columns, types, and PK/FK tags.
-3. Click **Use In Query**:
+1. Switch between **Schema** and **Metadata** tabs.
+2. In **Schema**, search tables/columns and expand a table to inspect columns, types, and PK/FK tags.
+3. In **Metadata**, review generated/managed DataPoints for the active target database.
+4. Click **Use In Query** from schema rows:
    - In Ask mode: inserts a natural-language prompt.
    - In SQL mode: inserts a SQL starter query.
 
@@ -142,7 +141,7 @@ Assistant responses support:
 - **SQL** tab (generated/executed SQL, with copy/edit actions)
 - **Table** tab (tabular results)
 - **Visualization** tab (chart rendering)
-- **Sources** tab (sources/evidence)
+- **Evidence** tab (source context and citations)
 - **Timing** tab (latency metrics, if available)
 
 Multi-question responses also include `Q1/Q2/...` selectors.
@@ -218,6 +217,7 @@ If a tool call requires approval:
 
 - `Ctrl/Cmd + K`: Focus query input
 - `Ctrl/Cmd + H`: Toggle conversation history sidebar
+- `Ctrl/Cmd + E`: Toggle schema/metadata explorer sidebar
 - `Ctrl/Cmd + /`: Open shortcuts dialog
 - `/`: Focus query input (when not typing in a form field)
 - `Esc`: Close active modal and restore focus

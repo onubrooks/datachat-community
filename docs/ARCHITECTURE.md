@@ -24,7 +24,7 @@ This architecture doc is intentionally limited to public, shipped behavior and p
 
 - CLI (`datachat ask`, `datachat chat`, `datachat onboarding wizard`)
 - API (`/api/v1/chat`, `/api/v1/tools/*`, `/api/v1/databases/*`)
-- Web UI (chat, SQL/table/visualization/evidence, onboarding/database manager)
+- Web UI (chat, SQL/table/visualization/evidence, onboarding/database manager, schema/metadata explorer)
 
 ### 3.2 Orchestration Flow
 
@@ -99,6 +99,12 @@ The next public enhancements should focus on retrieval quality and DataPoint lif
 - Provide optional, governed metric definition packs as DataPoints.
 - Keep source tiering explicit and auditable.
 - Use packs to reduce ambiguous metric interpretation.
+
+### 5.5 Packaging and Settings-First Config
+
+- Publish package-index install path (`pip install datachat`) for evaluator onboarding.
+- Add settings-first configuration (UI + CLI) for common setup so manual `.env` editing is optional.
+- Preserve `.env` compatibility with explicit migration guidance.
 
 ## 6. Out of Scope for Community v0.1
 

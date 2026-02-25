@@ -24,22 +24,25 @@ DataChat helps teams move from raw database access to decision-ready answers by 
 - Natural-language query flow (`chat`, `ask`, `/api/v1/chat`) with SQL generation, validation, and execution.
 - Credentials-only mode (no DataPoints required).
 - Multi-database registry with per-request routing via `target_database`.
-- Tool endpoints (`/api/v1/tools`, `/api/v1/tools/execute`) with typed parameters and policy checks.
-- Auto-profiling and managed pending DataPoint generation/review.
+- Tools API (`/api/v1/tools`, `/api/v1/tools/execute`) with typed parameter schemas and policy checks.
+- Auto-profiling pipeline that generates pending DataPoints for review/approval.
+- Live schema mode notice when DataPoints are absent.
+- Right-sidebar schema/metadata explorer switch for table inspection and generated/managed DataPoint review.
 - Result surfaces across UI/CLI/API: answer, SQL, table, visualization, evidence, timing.
-
-Current database connector support:
 
 - PostgreSQL
 - MySQL
 - ClickHouse
 
-## Near-Term Community Enhancements
+Catalog/profiling SQL templates exist for additional engines (BigQuery, Redshift), but live execution depends on connector implementation.
 
+## Near-Term Planned Enhancements
+
+- Package-index distribution path (`pip install datachat`) with release automation.
+- Settings-first onboarding path (UI + CLI) to reduce `.env` editing during first setup.
 - Retrieval explainability views (why a DataPoint was selected).
 - Better onboarding metadata generation quality.
-- Retrieval evaluation loop for context-only inspection and feedback.
-- Stronger managed DataPoint editing and approval workflows.
+- Retrieval evaluation and datapoint quality tooling (inspect retrieved context, label quality, and improve metadata loops).
 
 ---
 
@@ -71,6 +74,14 @@ datachat ask "list tables"
 ```
 
 Or open the UI at <http://localhost:3000> and ask in natural language.
+
+If you prefer guided setup, use either:
+
+```bash
+datachat onboarding wizard
+```
+
+or the UI onboarding flow from `/databases`.
 
 ---
 
@@ -228,6 +239,10 @@ ruff check .
 
 # Tests
 pytest -q
+
+# Frontend tests (fresh clone)
+cd frontend && npm ci
+npm run test -- --run src/components/chat/ChatInterface.test.tsx
 ```
 
 ---
