@@ -271,6 +271,11 @@ Note:
 3. Approve or reject individual items.
 4. Use **Bulk approve** when ready.
 
+Metadata explorer note:
+- In Chat (`/`), switch right sidebar to **Metadata**.
+- Pending, approved, and managed metadata items are listed separately.
+- Click an item to open **Metadata Detail** with description, business purpose, SQL template, and raw JSON payload.
+
 ### 18.5 Sync Retrieval Index
 
 Run sync after approvals so retrieval uses latest approved DataPoints.

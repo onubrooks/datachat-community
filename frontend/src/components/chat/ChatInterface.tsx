@@ -147,10 +147,16 @@ type MetadataExplorerItem = {
   name: string;
   type: string;
   status: "pending" | "approved" | "managed";
+  description?: string | null;
+  businessPurpose?: string | null;
+  sqlTemplate?: string | null;
+  tableName?: string | null;
+  relatedTables?: string[];
   confidence?: number | null;
   reviewNote?: string | null;
   sourceTier?: string | null;
   sourcePath?: string | null;
+  payload?: Record<string, unknown> | null;
 };
 
 const normalizeMetadataItem = (
@@ -164,6 +170,25 @@ const normalizeMetadataItem = (
     name: String(datapoint.name || datapoint.datapoint_id || item.pending_id || "Unnamed DataPoint"),
     type: String(datapoint.type || "Unknown"),
     status,
+    description:
+      typeof datapoint.description === "string" ? datapoint.description : null,
+    businessPurpose:
+      typeof datapoint.business_purpose === "string"
+        ? datapoint.business_purpose
+        : null,
+    sqlTemplate:
+      typeof datapoint.sql_template === "string" ? datapoint.sql_template : null,
+    tableName:
+      typeof datapoint.table_name === "string"
+        ? datapoint.table_name
+        : typeof datapoint.table === "string"
+          ? datapoint.table
+          : null,
+    relatedTables: Array.isArray(datapoint.related_tables)
+      ? datapoint.related_tables
+          .filter((entry): entry is string => typeof entry === "string")
+          .slice(0, 10)
+      : [],
     confidence:
       typeof item.confidence === "number"
         ? item.confidence
@@ -174,6 +199,7 @@ const normalizeMetadataItem = (
       typeof metadata.source_tier === "string" ? metadata.source_tier : null,
     sourcePath:
       typeof metadata.source_path === "string" ? metadata.source_path : null,
+    payload: datapoint,
   };
 };
 
@@ -186,9 +212,11 @@ const filterMetadataItems = (
     return items;
   }
   return items.filter((item) => {
-    const haystack = `${item.id} ${item.name} ${item.type} ${item.sourceTier || ""} ${
-      item.sourcePath || ""
-    }`.toLowerCase();
+    const haystack = `${item.id} ${item.name} ${item.type} ${item.description || ""} ${
+      item.businessPurpose || ""
+    } ${item.tableName || ""} ${(item.relatedTables || []).join(" ")} ${
+      item.sourceTier || ""
+    } ${item.sourcePath || ""}`.toLowerCase();
     return haystack.includes(search);
   });
 };
@@ -259,6 +287,12 @@ export function ChatInterface() {
   const [schemaSearch, setSchemaSearch] = useState("");
   const [metadataSearch, setMetadataSearch] = useState("");
   const [explorerMode, setExplorerMode] = useState<"schema" | "metadata">("schema");
+  const [selectedMetadataKey, setSelectedMetadataKey] = useState<string | null>(null);
+  const [metadataDetailCache, setMetadataDetailCache] = useState<
+    Record<string, Record<string, unknown>>
+  >({});
+  const [metadataDetailLoadingKey, setMetadataDetailLoadingKey] = useState<string | null>(null);
+  const [metadataDetailError, setMetadataDetailError] = useState<string | null>(null);
   const [selectedSchemaTable, setSelectedSchemaTable] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState("");
   const [composerMode, setComposerMode] = useState<"nl" | "sql">("nl");
@@ -872,13 +906,43 @@ export function ChatInterface() {
           name: item.name || item.datapoint_id,
           type: item.type || "Unknown",
           status: "managed" as const,
+          description: null,
+          businessPurpose: null,
+          sqlTemplate: null,
+          tableName: null,
+          relatedTables: [],
           sourceTier: item.source_tier || null,
           sourcePath: item.source_path || null,
+          payload: null,
         })),
         metadataSearch
       ),
     [managedMetadataQuery.data, metadataSearch]
   );
+
+  const allMetadataItems = useMemo(
+    () => [...pendingMetadataItems, ...approvedMetadataItems, ...managedMetadataItems],
+    [approvedMetadataItems, managedMetadataItems, pendingMetadataItems]
+  );
+
+  const selectedMetadataItem = useMemo(
+    () =>
+      allMetadataItems.find(
+        (item) => `${item.status}:${item.id}` === selectedMetadataKey
+      ) || null,
+    [allMetadataItems, selectedMetadataKey]
+  );
+
+  const selectedMetadataDetail = useMemo(() => {
+    if (!selectedMetadataKey) {
+      return null;
+    }
+    return (
+      metadataDetailCache[selectedMetadataKey] ||
+      selectedMetadataItem?.payload ||
+      null
+    );
+  }, [metadataDetailCache, selectedMetadataItem, selectedMetadataKey]);
 
   const metadataLoading =
     pendingMetadataQuery.isLoading ||
@@ -904,6 +968,47 @@ export function ChatInterface() {
     managedMetadataQuery.error,
     pendingMetadataQuery.error,
   ]);
+
+  useEffect(() => {
+    if (
+      selectedMetadataKey &&
+      !allMetadataItems.some((item) => `${item.status}:${item.id}` === selectedMetadataKey)
+    ) {
+      setSelectedMetadataKey(null);
+    }
+  }, [allMetadataItems, selectedMetadataKey]);
+
+  const handleSelectMetadataItem = useCallback(
+    async (item: MetadataExplorerItem) => {
+      const key = `${item.status}:${item.id}`;
+      setSelectedMetadataKey(key);
+      setMetadataDetailError(null);
+
+      if (item.payload) {
+        setMetadataDetailCache((current) =>
+          current[key] ? current : { ...current, [key]: item.payload as Record<string, unknown> }
+        );
+        return;
+      }
+
+      if (metadataDetailCache[key]) {
+        return;
+      }
+
+      setMetadataDetailLoadingKey(key);
+      try {
+        const datapoint = await apiClient.getDatapoint(item.id);
+        setMetadataDetailCache((current) => ({ ...current, [key]: datapoint }));
+      } catch (err) {
+        setMetadataDetailError(
+          err instanceof Error ? err.message : "Failed to load metadata detail."
+        );
+      } finally {
+        setMetadataDetailLoadingKey((current) => (current === key ? null : current));
+      }
+    },
+    [metadataDetailCache]
+  );
 
   const sortedConversationHistory = useMemo(
     () =>
@@ -1836,11 +1941,18 @@ export function ChatInterface() {
             pendingMetadataItems={pendingMetadataItems}
             approvedMetadataItems={approvedMetadataItems}
             managedMetadataItems={managedMetadataItems}
+            selectedMetadataKey={selectedMetadataKey}
+            metadataDetail={selectedMetadataDetail}
+            metadataDetailLoading={Boolean(
+              selectedMetadataKey && metadataDetailLoadingKey === selectedMetadataKey
+            )}
+            metadataDetailError={metadataDetailError}
             selectedSchemaTable={selectedSchemaTable}
             onToggle={() => setIsSchemaSidebarOpen((prev) => !prev)}
             onExplorerModeChange={setExplorerMode}
             onSearchChange={handleSchemaSearchChange}
             onMetadataSearchChange={setMetadataSearch}
+            onSelectMetadataItem={handleSelectMetadataItem}
             onSelectTable={handleSchemaSelectTable}
             onUseTable={handleSchemaUseTable}
           />

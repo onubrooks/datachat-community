@@ -695,8 +695,12 @@ export function DatabaseManager() {
     }
   };
 
-  const handleGenerate = async (): Promise<boolean> => {
-    if (!job?.profile_id) return false;
+  const handleGenerate = async (profileIdOverride?: string | null): Promise<boolean> => {
+    const profileId = profileIdOverride || job?.profile_id || null;
+    if (!profileId) {
+      setError("Run profiling first to generate metadata.");
+      return false;
+    }
     setError(null);
     if (effectiveGenerationJob?.status === "completed") {
       const confirmReplace = confirm(
@@ -709,7 +713,7 @@ export function DatabaseManager() {
     setJobState("generating", true);
     try {
       const generation = await api.startDatapointGeneration({
-        profile_id: job.profile_id,
+        profile_id: profileId,
         tables: selectedTables,
         depth,
         batch_size: 10,
@@ -717,8 +721,8 @@ export function DatabaseManager() {
         max_metrics_per_table: 3,
         replace_existing: true,
       });
-      queryClient.setQueryData(["generation-latest", job.profile_id], generation);
-      setActiveGenerationProfileId(job.profile_id);
+      queryClient.setQueryData(["generation-latest", profileId], generation);
+      setActiveGenerationProfileId(profileId);
       setGenerationFallbackJob(generation);
       await invalidateManagerQueries();
       return true;
@@ -973,6 +977,10 @@ export function DatabaseManager() {
   const hasProfileCompleted = Boolean(job?.status === "completed" && job.profile_id);
   const hasPendingDatapoints = pending.length > 0;
   const hasApprovedDatapoints = approved.length > 0;
+  const hasGeneratedMetadata =
+    hasPendingDatapoints ||
+    hasApprovedDatapoints ||
+    effectiveGenerationJob?.status === "completed";
   const hasSynced = syncStatus?.status === "completed";
   const onboardingWizardCommand = quickstartConnection
     ? `uv run datachat onboarding wizard --connection-id ${quickstartConnection.connection_id} --metrics-depth metrics_full`
@@ -1025,17 +1033,36 @@ export function DatabaseManager() {
   };
 
   const runQuickstartGenerate = async (): Promise<boolean> => {
+    if (quickstartConnection) {
+      setSelectedConnectionId(quickstartConnection.connection_id);
+    }
+    let profileId = job?.profile_id || null;
+    if (quickstartConnection && !profileId) {
+      try {
+        const latestJob = await api.getLatestProfilingJob(quickstartConnection.connection_id);
+        queryClient.setQueryData(
+          ["profiling-job-latest", quickstartConnection.connection_id],
+          latestJob
+        );
+        profileId = latestJob?.profile_id || null;
+      } catch {
+        profileId = null;
+      }
+    }
     await emitEntryEvent("generate_datapoints", "started", {
-      profile_id: job?.profile_id || null,
+      profile_id: profileId,
     });
-    const ok = await handleGenerate();
+    const ok = await handleGenerate(profileId);
     await emitEntryEvent("generate_datapoints", ok ? "completed" : "failed", {
-      profile_id: job?.profile_id || null,
+      profile_id: profileId,
     });
     return ok;
   };
 
   const runQuickstartApprove = async (): Promise<boolean> => {
+    if (quickstartConnection) {
+      setSelectedConnectionId(quickstartConnection.connection_id);
+    }
     await emitEntryEvent("approve_pending", "started", { pending_count: pending.length });
     const ok = await handleBulkApprove();
     await emitEntryEvent("approve_pending", ok ? "completed" : "failed", {
@@ -1059,17 +1086,17 @@ export function DatabaseManager() {
 
   const wizardStepDone: Record<"connect" | "profile" | "generate" | "approve" | "sync", boolean> =
     wizardReplayMode
-      ? {
+        ? {
           connect: hasManagedConnection,
           profile: wizardReplayProgress.profile,
-          generate: wizardReplayProgress.generate,
+          generate: wizardReplayProgress.generate || hasGeneratedMetadata,
           approve: wizardReplayProgress.approve,
           sync: wizardReplayProgress.sync,
         }
       : {
           connect: hasManagedConnection,
           profile: hasProfileCompleted,
-          generate: hasPendingDatapoints || hasApprovedDatapoints,
+          generate: hasGeneratedMetadata,
           approve: hasApprovedDatapoints,
           sync: hasSynced,
         };
@@ -1245,7 +1272,7 @@ export function DatabaseManager() {
         busy: false,
       };
     }
-    if (!hasPendingDatapoints && !hasApprovedDatapoints) {
+    if (!hasGeneratedMetadata) {
       return {
         key: "generate" as const,
         title: "Step 3: Generate managed metadata",
@@ -1272,7 +1299,9 @@ export function DatabaseManager() {
         key: "sync" as const,
         title: "Step 5: Sync retrieval index",
         description:
-          "Sync vector and graph indexes so new metadata is used in query interpretation and retrieval.",
+          hasApprovedDatapoints
+            ? "Sync vector and graph indexes so approved metadata is used in query interpretation and retrieval."
+            : "No pending drafts remain. Run sync to refresh retrieval state and continue.",
         action: "sync" as WizardAction,
         actionLabel: "Run Sync",
         busy: false,
@@ -1454,10 +1483,12 @@ export function DatabaseManager() {
         ? "Metadata generation is running in the background."
         : hasPendingDatapoints
         ? "Pending DataPoints ready for review."
+        : hasGeneratedMetadata
+        ? "Generation completed. Continue with approval or sync."
         : hasProfileCompleted
           ? "Generate pending DataPoints from the latest profile."
           : "Requires completed profiling first.",
-      status: hasPendingDatapoints ? "done" : hasProfileCompleted ? "ready" : "blocked",
+      status: hasGeneratedMetadata ? "done" : hasProfileCompleted ? "ready" : "blocked",
     },
     {
       key: "approve",
@@ -1653,7 +1684,7 @@ export function DatabaseManager() {
             variant="secondary"
             size="sm"
             onClick={runQuickstartGenerate}
-            disabled={!hasProfileCompleted || hasPendingDatapoints || generationInProgress}
+            disabled={!hasProfileCompleted || generationInProgress}
           >
             3) Generate
           </Button>
@@ -1669,7 +1700,7 @@ export function DatabaseManager() {
             variant="secondary"
             size="sm"
             onClick={runQuickstartSync}
-            disabled={(!hasApprovedDatapoints && !hasPendingDatapoints) || syncInProgress}
+            disabled={!hasGeneratedMetadata || syncInProgress}
           >
             5) Sync
           </Button>
