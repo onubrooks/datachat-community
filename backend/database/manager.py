@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -34,6 +35,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS database_connections_default_idx
 ON database_connections (is_default)
 WHERE is_default;
 """
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseConnectionManager:
@@ -158,7 +161,12 @@ class DatabaseConnectionManager:
             ORDER BY created_at DESC
             """
         )
-        return [self._row_to_connection(row) for row in rows]
+        connections: list[DatabaseConnection] = []
+        for row in rows:
+            connection = self._try_row_to_connection(row)
+            if connection is not None:
+                connections.append(connection)
+        return connections
 
     async def get_connection(self, connection_id: UUID | str) -> DatabaseConnection:
         """Retrieve a single active connection."""
@@ -190,7 +198,7 @@ class DatabaseConnectionManager:
     async def get_default_connection(self) -> DatabaseConnection | None:
         """Return the default connection if set."""
         self._ensure_pool()
-        row = await self._pool.fetchrow(
+        rows = await self._pool.fetch(
             """
             SELECT
                 connection_id,
@@ -205,12 +213,20 @@ class DatabaseConnectionManager:
                 last_profiled,
                 datapoint_count
             FROM database_connections
-            WHERE is_default = TRUE AND is_active = TRUE
+            WHERE is_active = TRUE
+            ORDER BY is_default DESC, created_at DESC
             """
         )
-        if row is None:
-            return None
-        return self._row_to_connection(row)
+        fallback: DatabaseConnection | None = None
+        for row in rows:
+            connection = self._try_row_to_connection(row)
+            if connection is None:
+                continue
+            if row["is_default"]:
+                return connection
+            if fallback is None:
+                fallback = connection
+        return fallback
 
     async def set_default(self, connection_id: UUID | str) -> None:
         """Mark a connection as the default."""
@@ -334,6 +350,17 @@ class DatabaseConnectionManager:
             last_profiled=row["last_profiled"],
             datapoint_count=row["datapoint_count"],
         )
+
+    def _try_row_to_connection(self, row: asyncpg.Record) -> DatabaseConnection | None:
+        try:
+            return self._row_to_connection(row)
+        except ValueError as exc:
+            logger.warning(
+                "Skipping unreadable database connection '%s': %s",
+                row["connection_id"],
+                exc,
+            )
+            return None
 
     async def _validate_connection(self, database_type: str, database_url: str) -> None:
         inferred_database_type = infer_database_type(database_url)

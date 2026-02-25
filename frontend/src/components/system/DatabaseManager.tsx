@@ -40,9 +40,10 @@ const inferDatabaseTypeFromUrl = (value: string): string | null => {
 };
 
 type QuickstartStatus = "done" | "ready" | "blocked";
-type WizardAction = "open_connections" | "profile" | "generate" | "approve" | "sync" | null;
+type WizardAction = "connect" | "profile" | "generate" | "approve" | "sync" | null;
 
 type JobsState = {
+  wizardConnecting: boolean;
   generating: boolean;
   bulkApproving: boolean;
   syncing: boolean;
@@ -131,6 +132,7 @@ export function DatabaseManager() {
   const [pendingEdits, setPendingEdits] = useState<Record<string, string>>({});
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobsState>({
+    wizardConnecting: false,
     generating: false,
     bulkApproving: false,
     syncing: false,
@@ -176,6 +178,10 @@ export function DatabaseManager() {
   const [databaseType, setDatabaseType] = useState("postgresql");
   const [description, setDescription] = useState("");
   const [isDefault, setIsDefault] = useState(false);
+  const [wizardConnectionName, setWizardConnectionName] = useState("Primary Database");
+  const [wizardDatabaseUrl, setWizardDatabaseUrl] = useState("");
+  const [wizardDatabaseType, setWizardDatabaseType] = useState("postgresql");
+  const [wizardIsDefault, setWizardIsDefault] = useState(true);
   const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [editingDatabaseUrl, setEditingDatabaseUrl] = useState("");
@@ -1075,10 +1081,10 @@ export function DatabaseManager() {
           key: "connect" as const,
           title: "Step 1: Add a managed connection",
           description:
-            "Create a non-environment database connection first. The wizard will continue from there.",
-          action: "open_connections" as WizardAction,
-          actionLabel: "Open Connections Setup",
-          busy: false,
+            "Enter your target database URL here. We will validate and create the connection in this wizard.",
+          action: "connect" as WizardAction,
+          actionLabel: jobs.wizardConnecting ? "Connecting..." : "Connect Database",
+          busy: jobs.wizardConnecting,
         };
       }
       if (profileInProgress) {
@@ -1180,10 +1186,10 @@ export function DatabaseManager() {
         key: "connect" as const,
         title: "Step 1: Add a managed connection",
         description:
-          "Create a non-environment database connection first. The wizard will continue from there.",
-        action: "open_connections" as WizardAction,
-        actionLabel: "Open Connections Setup",
-        busy: false,
+          "Enter your target database URL here. We will validate and create the connection in this wizard.",
+        action: "connect" as WizardAction,
+        actionLabel: jobs.wizardConnecting ? "Connecting..." : "Connect Database",
+        busy: jobs.wizardConnecting,
       };
     }
 
@@ -1306,11 +1312,51 @@ export function DatabaseManager() {
 
   const handleWizardPrimaryAction = async () => {
     switch (wizardStage.action) {
-      case "open_connections":
-        setOnboardingWizardOpen(false);
-        handleTabChange("connections");
-        addConnectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      case "connect": {
+        const trimmedUrl = wizardDatabaseUrl.trim();
+        if (!trimmedUrl) {
+          setError("Enter a target database URL to continue.");
+          return;
+        }
+        const trimmedName = wizardConnectionName.trim() || "Primary Database";
+        setError(null);
+        setJobState("wizardConnecting", true);
+        try {
+          await emitEntryEvent("connect_database", "started", {
+            source: "wizard",
+            database_type: wizardDatabaseType,
+          });
+          const connection = await api.createDatabase({
+            name: trimmedName,
+            database_url: trimmedUrl,
+            database_type: wizardDatabaseType,
+            tags: ["managed"],
+            description: "Created via onboarding wizard",
+            is_default: wizardIsDefault,
+          });
+          setSelectedConnectionId(connection.connection_id);
+          setWizardConnectionName(connection.name);
+          setWizardDatabaseUrl("");
+          setWizardDatabaseType(connection.database_type);
+          setWizardIsDefault(false);
+          showNotice(`Connected ${connection.name}.`);
+          await invalidateManagerQueries();
+          await emitEntryEvent("connect_database", "completed", {
+            source: "wizard",
+            connection_id: connection.connection_id,
+          });
+        } catch (err) {
+          const message = (err as Error).message;
+          setError(message);
+          await emitEntryEvent("connect_database", "failed", {
+            source: "wizard",
+            error: message,
+          });
+        } finally {
+          setJobState("wizardConnecting", false);
+        }
         return;
+      }
       case "profile":
         if (quickstartConnection) {
           setSelectedConnectionId(quickstartConnection.connection_id);
@@ -2470,9 +2516,56 @@ export function DatabaseManager() {
             <div className="mt-4 rounded-md border border-border p-4">
               <div className="text-sm font-medium">{wizardStage.title}</div>
               <p className="mt-1 text-xs text-muted-foreground">{wizardStage.description}</p>
+              {wizardStage.action === "connect" && (
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  <Input
+                    placeholder="Connection name"
+                    value={wizardConnectionName}
+                    onChange={(event) => setWizardConnectionName(event.target.value)}
+                    disabled={wizardStage.busy}
+                  />
+                  <Input
+                    placeholder="postgresql://user:pass@host:5432/database"
+                    value={wizardDatabaseUrl}
+                    onChange={(event) => {
+                      const nextUrl = event.target.value;
+                      setWizardDatabaseUrl(nextUrl);
+                      const inferredType = inferDatabaseTypeFromUrl(nextUrl);
+                      if (inferredType) {
+                        setWizardDatabaseType(inferredType);
+                      }
+                    }}
+                    disabled={wizardStage.busy}
+                  />
+                  <select
+                    className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={wizardDatabaseType}
+                    onChange={(event) => setWizardDatabaseType(event.target.value)}
+                    aria-label="Wizard database type"
+                    disabled={wizardStage.busy}
+                  >
+                    <option value="postgresql">postgresql</option>
+                    <option value="mysql">mysql</option>
+                    <option value="clickhouse">clickhouse</option>
+                  </select>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={wizardIsDefault}
+                      onChange={(event) => setWizardIsDefault(event.target.checked)}
+                      disabled={wizardStage.busy}
+                    />
+                    Set as default connection
+                  </label>
+                </div>
+              )}
               {wizardStage.busy && (
                 <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                  <p>Refresh indicators above update automatically while background jobs run.</p>
+                  {wizardStage.action === "connect" ? (
+                    <p>Validating connection and saving credentials...</p>
+                  ) : (
+                    <p>Refresh indicators above update automatically while background jobs run.</p>
+                  )}
                   {profileInProgress && (
                     <p>
                       Profiling status: {job?.status || "running"}

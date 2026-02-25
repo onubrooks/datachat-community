@@ -240,6 +240,12 @@ Use the guided sequence:
 
 Status dots/checkmarks show step state (`done`, `ready`, `blocked`).
 
+Wizard behavior:
+- Click **Start Guided Wizard** in the Quickstart tab.
+- Step 1 now accepts connection details directly in the modal (name, URL, type, default flag).
+- On successful connection validation, the wizard automatically advances to profiling.
+- Long-running steps (profile/generate/sync) show live in-modal progress.
+
 ### 18.2 Add/Edit/Delete Connections
 
 1. Add connection with name, URL, type, and optional description.
