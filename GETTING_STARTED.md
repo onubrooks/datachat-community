@@ -2,6 +2,26 @@
 
 This guide reflects current, implemented behavior.
 
+## 0. 5-Minute Path (Recommended for Evaluators)
+
+```bash
+git clone https://github.com/onubrooks/datachat-community.git
+cd datachat-community
+cp .env.example .env
+# set DATABASE_URL + one LLM key in .env
+docker-compose up
+```
+
+Then in a second terminal:
+
+```bash
+datachat ask "list tables"
+```
+
+If this succeeds, continue with the full guide below.
+
+---
+
 ## 1. Decide Your Mode
 
 ### Mode A: Credentials-only (fastest)
@@ -30,8 +50,8 @@ Additional required env:
 ## 2. Install
 
 ```bash
-git clone https://github.com/onubrooks/datachat.git
-cd datachat
+git clone https://github.com/onubrooks/datachat-community.git
+cd datachat-community
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .

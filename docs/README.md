@@ -1,75 +1,46 @@
-# DataChat Docs
+# DataChat Community Docs
 
-This directory contains product and engineering documentation for DataChat.
+Public documentation for `datachat-community`.
 
-Strategy alignment:
+## Start Here
 
-- current wedge: decision workflow system for finance teams
-- long-term direction: AI platform for business decision makers
-- prioritization rule: finance workflow outcomes pull platform capability sequencing
+- `../README.md` - product overview and quick links.
+- `../GETTING_STARTED.md` - fastest setup path.
+- `LAUNCH_CHECKLIST.md` - pre-announcement readiness checklist.
+- `API.md` - endpoint and payload reference.
+- `CLI_QUICKSTART.md` - CLI command guide.
 
-## Implementation Snapshot (February 2026)
+## Core Architecture and Capabilities
 
-Implemented now:
+- `ARCHITECTURE.md` - community runtime architecture (shipped + near-term public enhancements).
+- `CAPABILITY_CONTRACT.md` - supported vs partial vs planned runtime behavior.
+- `COMMUNITY_V0_1_SCOPE_LOCK.md` - what is in/out for current community release.
+- `COMMUNITY_EXPORT_MANIFEST.md` - private->community export include/exclude policy.
 
-- credentials-only querying with deterministic catalog intelligence
-- onboarding wizard (`datachat onboarding wizard`) for one-command connection + deep metadata generation
-- DataPoint-enhanced retrieval and answer synthesis
-- multi-database registry with `target_database` routing
-- tool registry/execution with policy checks and typed parameter schemas
-- profiling pipeline that generates pending DataPoints for review
+## Setup and Operations
 
-Planned (not yet implemented as full product features):
+- `CREDENTIALS_ONLY_MODE.md` - no-DataPoint startup behavior.
+- `MULTI_DATABASE.md` - connection registry and target routing.
+- `OPERATIONS.md` - operational notes.
+- `ROUTING_POLICY.md` - routing and clarification policy.
 
-- workspace/folder indexing and codebase understanding workflows
-- governed finance authority knowledge pack (canonical finance-global metric definitions)
-- runtime connectors for BigQuery/Redshift
-- Levels 3-5 automation features
+## DataPoints and Retrieval
 
-## Document Map
+- `DATAPOINT_SCHEMA.md` - DataPoint model.
+- `DATAPOINT_CONTRACTS.md` - contract rules and lint expectations.
+- `DATAPOINT_MIGRATION.md` - migration and quality strategy.
+- `RAG_EVAL.md` - retrieval/QA evaluation patterns.
+- `DATAPOINT_EXAMPLES_TESTING.md` - example-driven validation.
 
-Planning hierarchy:
+## UI and Demo Flows
 
-- `PRD.md` = what/why
-- `ARCHITECTURE.md` = how
-- `LEVELS.md` = maturity definitions
-- `ROADMAP.md` = sequencing/status/dependencies
-- `specs/` = per-initiative implementation details (execution contract)
+- `UI_HOWTO.md` - user-facing UI workflows.
+- `DEMO_PLAYBOOK.md` - demo flow guidance.
+- `finance/FINANCE_END_USER_QUICKSTART.md` - finance demo quickstart.
+- `finance/FINANCE_PROMPT_PACK_V1.md` - finance prompt pack.
+- `finance/FINANCE_WORKFLOW_V1_MANUAL_TEST.md` - finance manual test rubric.
 
-- `../GETTING_STARTED.md` - setup paths and first-run flow.
-- `CLI_QUICKSTART.md` - terminal how-to for ask/chat/templates/schema/session commands.
-- `ARCHITECTURE.md` - system architecture and engineering design guide.
-- `ARCHITECTURE_DYNAMIC_DATA_AGENT.md` - accepted target architecture for dynamic data-agent harness (data + business logic + organizational knowledge).
-- `ROADMAP.md` - unified initiative tracker (single source of truth for status/timing/dependencies).
-- `specs/README.md` - spec authoring workflow and required implementation-spec sections.
-- `API.md` - API endpoints and payloads.
-- `UI_HOWTO.md` - step-by-step user guide for chat UI workflows (ask mode, SQL mode, sidebars, charts, pagination, shortcuts).
-- `CREDENTIALS_ONLY_MODE.md` - capabilities/limits for credentials-only mode.
-- `MULTI_DATABASE.md` - connection registry and per-request routing.
-- `LEVELS.md` - maturity model with implementation status.
-- `PRD.md` - delivery-tracking PRD (shipped vs planned).
-- `CAPABILITY_CONTRACT.md` - shipped runtime capability matrix (supported/partial/planned).
-- `METADATAOPS_FOUNDATION.md` - philosophy, priorities, and contributor alignment for metadata quality + observability.
-- `SESSION_MEMORY.md` - chat history + memory strategy for follow-ups across UI/CLI/API.
-- `PHASE1_KPI_GATES.md` - CI and release KPI gates for Phase 1 operational hardening.
-- `PHASE14_SIMPLE_ENTRY_LAYER.md` - quickstart/train wrappers and UI onboarding flow.
-- `ROUTING_POLICY.md` - routing thresholds, decision trace model, and route eval checks.
-- `MANUAL_EVAL_SCORECARD.md` - manual scoring rubric + runner commands for UI/CLI comparison.
-- `OPERATIONS.md` - deployment and operational guidance.
-- `DEMO_PLAYBOOK.md` - demo setup and persona flows.
-- `DATAPOINT_SCHEMA.md` - DataPoint model and conventions.
-- `DATAPOINT_CONTRACTS.md` - lintable metadata contracts for DataPoint quality gates.
-- `PLAYBOOK.md` - development workflows.
-- `OSS_SPLIT_CHECKLIST.md` - step-by-step plan to keep advanced features private and publish SQL-only community edition.
+## Development
+
+- `PLAYBOOK.md` - contributor workflow.
 - `PROMPTS.md` - prompt architecture and guardrails.
-- `DATAPOINT_EXAMPLES_TESTING.md` - end-to-end DataPoint-driven manual test playbook for grocery + fintech examples.
-- `finance/FINANCE_WORKFLOW_V1_MANUAL_TEST.md` - manual runbook and release quality bar for Finance Workflow v1.
-- `finance/FINANCE_END_USER_QUICKSTART.md` - end-user step-by-step guide to seed fintech demo data, sync finance datapoints, and run value-driving prompts.
-- `finance/FINANCE_PROMPT_PACK_V1.md` - scripted 20-prompt finance demo pack with datapoint mapping and expected signals.
-- `finance/FINANCE_WORKFLOW_VALUE_PROOF.md` - one-page business value proof for finance workflow demos and pilot conversations.
-- `templates/finance_workflow_scorecard.csv` - scorecard template consumed by `scripts/finance_workflow_gate.py`.
-- `templates/COMMUNITY_REPO_README_TEMPLATE.md` - starter README template for `datachat-community` public repo.
-
-## Prompt Files
-
-Prompt sources live in `prompts/`. See `prompts/README.md` and `PROMPTS.md`.
