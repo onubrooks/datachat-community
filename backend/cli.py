@@ -2451,6 +2451,51 @@ def dev(
         raise click.ClickException("Nothing to run. Remove --no-backend or --no-frontend.")
 
     if not no_backend:
+        apply_config_defaults()
+        provider_env = os.getenv("LLM_DEFAULT_PROVIDER") or os.getenv("LLM_PROVIDER")
+        default_provider = (provider_env or "openai").strip().lower()
+        def _is_placeholder_key(value: str | None) -> bool:
+            if not value:
+                return True
+            normalized = value.strip().lower()
+            return normalized in {
+                "your-key-here",
+                "sk-your-key-here",
+                "sk-ant-your-key-here",
+            } or "your-key-here" in normalized
+
+        key_by_provider = {
+            "openai": "LLM_OPENAI_API_KEY",
+            "anthropic": "LLM_ANTHROPIC_API_KEY",
+            "google": "LLM_GOOGLE_API_KEY",
+        }
+        required_providers: set[str] = {default_provider}
+
+        for override_key in (
+            "LLM_CLASSIFIER_PROVIDER",
+            "LLM_SQL_PROVIDER",
+            "LLM_FALLBACK_PROVIDER",
+        ):
+            provider_value = (os.getenv(override_key) or "").strip().lower()
+            if provider_value:
+                required_providers.add(provider_value)
+
+        missing_key_vars = sorted(
+            {
+                key_by_provider[provider]
+                for provider in required_providers
+                if provider in key_by_provider
+                and _is_placeholder_key(os.getenv(key_by_provider[provider]))
+            }
+        )
+        if missing_key_vars:
+            missing_list = ", ".join(missing_key_vars)
+            raise click.ClickException(
+                "Missing required LLM API key(s) for backend startup: "
+                f"{missing_list}. Set one in .env before running `datachat dev`."
+            )
+
+    if not no_backend:
         backend_cmd = [
             sys.executable,
             "-m",
