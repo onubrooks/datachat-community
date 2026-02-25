@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
@@ -120,6 +121,8 @@ const DATAPOINT_EDITOR_TEMPLATE = `{
 }`;
 
 export function DatabaseManager() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncScopeMode, setSyncScopeMode] = useState<"auto" | "global" | "database">("auto");
@@ -218,6 +221,24 @@ export function DatabaseManager() {
       noticeTimerRef.current = null;
     }, 5000);
   };
+
+  useEffect(() => {
+    const tabParam = searchParams.get("tab");
+    if (tabParam && DATABASE_TABS.includes(tabParam as DatabaseTab)) {
+      setActiveTab(tabParam as DatabaseTab);
+    }
+
+    const wizardParam = searchParams.get("wizard");
+    if (wizardParam === "1" || wizardParam === "true") {
+      setActiveTab("quickstart");
+      setOnboardingWizardOpen(true);
+
+      const nextParams = new URLSearchParams(searchParams.toString());
+      nextParams.delete("wizard");
+      const nextQuery = nextParams.toString();
+      router.replace(nextQuery ? `/databases?${nextQuery}` : "/databases");
+    }
+  }, [router, searchParams]);
 
   const setJobState = useCallback((job: keyof JobsState, value: boolean) => {
     setJobs((current) => ({ ...current, [job]: value }));

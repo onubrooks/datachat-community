@@ -16,12 +16,14 @@ This guide explains how to use the web UI features that are implemented today, i
 
 ## 2. First-Time Setup (if prompted)
 
-If the system is not initialized, the chat page shows a setup card.
+If the system is not initialized, the chat page shows a wizard-first setup card.
 
-1. Enter your target `DATABASE_URL`.
-2. Optionally enter a system database URL.
-3. Submit setup.
-4. After setup, go to **Manage DataPoints** to profile/generate/sync.
+1. Click **Start Onboarding Wizard**.
+2. Complete guided steps (connect, profile, generate, approve, sync).
+3. Return to chat and ask your first question.
+
+Optional:
+- Use **Advanced manual setup** only when you need direct URL initialization.
 
 ---
 
