@@ -288,7 +288,7 @@ datachat dp apply-suggestions --datapoint metric_revenue_001 --dry-run
 ## References
 
 - `docs/DATAPOINT_SCHEMA.md` - Target YAML schema
-- `docs/LEVELS.md` - Level maturity tracking
-- `docs/PRD.md` - Product requirements and phase tracking
+- `docs/CAPABILITY_CONTRACT.md` - Runtime capability and scope tracking
+- `docs/COMMUNITY_V0_1_SCOPE_LOCK.md` - Community release scope and quality bar
 - `backend/models/datapoint.py` - Current JSON models
 - `backend/knowledge/contracts.py` - Contract validation

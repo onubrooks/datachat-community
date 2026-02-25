@@ -44,14 +44,37 @@ Catalog/profiling SQL templates exist for additional engines (MySQL, BigQuery, R
 
 ---
 
+
+## 5-Minute Quickstart
+
+If you only want first value fast:
+
+```bash
+git clone https://github.com/onubrooks/datachat-community.git
+cd datachat-community
+cp .env.example .env
+# set DATABASE_URL + one LLM key in .env
+docker-compose up
+```
+
+Then ask your first question:
+
+```bash
+datachat ask "list tables"
+```
+
+Or open the UI at <http://localhost:3000> and ask in natural language.
+
+---
+
 ## Quick Start
 
 ### Using Docker Compose
 
 ```bash
 # 1. Clone
-git clone https://github.com/onubrooks/datachat.git
-cd datachat
+git clone https://github.com/onubrooks/datachat-community.git
+cd datachat-community
 
 # 2. Configure env
 cp .env.example .env
@@ -185,6 +208,7 @@ See [`docs/API.md`](docs/API.md).
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/CAPABILITY_CONTRACT.md`](docs/CAPABILITY_CONTRACT.md)
 - [`docs/COMMUNITY_V0_1_SCOPE_LOCK.md`](docs/COMMUNITY_V0_1_SCOPE_LOCK.md)
+- [`docs/LAUNCH_CHECKLIST.md`](docs/LAUNCH_CHECKLIST.md)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 ---
