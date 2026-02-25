@@ -142,6 +142,57 @@ const QUERY_TEMPLATES: Array<{ id: string; label: string; build: (selectedTable?
   },
 ];
 
+type MetadataExplorerItem = {
+  id: string;
+  name: string;
+  type: string;
+  status: "pending" | "approved" | "managed";
+  confidence?: number | null;
+  reviewNote?: string | null;
+  sourceTier?: string | null;
+  sourcePath?: string | null;
+};
+
+const normalizeMetadataItem = (
+  item: Record<string, unknown>,
+  status: "pending" | "approved"
+): MetadataExplorerItem => {
+  const datapoint = (item.datapoint as Record<string, unknown>) || {};
+  const metadata = (datapoint.metadata as Record<string, unknown>) || {};
+  return {
+    id: String(datapoint.datapoint_id || item.pending_id || "unknown_datapoint"),
+    name: String(datapoint.name || datapoint.datapoint_id || item.pending_id || "Unnamed DataPoint"),
+    type: String(datapoint.type || "Unknown"),
+    status,
+    confidence:
+      typeof item.confidence === "number"
+        ? item.confidence
+        : null,
+    reviewNote:
+      typeof item.review_note === "string" ? item.review_note : null,
+    sourceTier:
+      typeof metadata.source_tier === "string" ? metadata.source_tier : null,
+    sourcePath:
+      typeof metadata.source_path === "string" ? metadata.source_path : null,
+  };
+};
+
+const filterMetadataItems = (
+  items: MetadataExplorerItem[],
+  query: string
+): MetadataExplorerItem[] => {
+  const search = query.trim().toLowerCase();
+  if (!search) {
+    return items;
+  }
+  return items.filter((item) => {
+    const haystack = `${item.id} ${item.name} ${item.type} ${item.sourceTier || ""} ${
+      item.sourcePath || ""
+    }`.toLowerCase();
+    return haystack.includes(search);
+  });
+};
+
 export function ChatInterface() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -206,6 +257,8 @@ export function ChatInterface() {
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaSearch, setSchemaSearch] = useState("");
+  const [metadataSearch, setMetadataSearch] = useState("");
+  const [explorerMode, setExplorerMode] = useState<"schema" | "metadata">("schema");
   const [selectedSchemaTable, setSelectedSchemaTable] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState("");
   const [composerMode, setComposerMode] = useState<"nl" | "sql">("nl");
@@ -249,6 +302,29 @@ export function ChatInterface() {
     queryKey: ["database-schema", targetDatabaseId],
     queryFn: async () => apiClient.getDatabaseSchema(targetDatabaseId as string),
     enabled: Boolean(targetDatabaseId),
+  });
+
+  const pendingMetadataQuery = useQuery({
+    queryKey: ["metadata-pending", targetDatabaseId],
+    queryFn: async () =>
+      apiClient.listPendingDatapoints({
+        statusFilter: "pending",
+        connectionId: targetDatabaseId,
+      }),
+  });
+
+  const approvedMetadataQuery = useQuery({
+    queryKey: ["metadata-approved", targetDatabaseId],
+    queryFn: async () =>
+      apiClient.listPendingDatapoints({
+        statusFilter: "approved",
+        connectionId: targetDatabaseId,
+      }),
+  });
+
+  const managedMetadataQuery = useQuery({
+    queryKey: ["metadata-managed"],
+    queryFn: async () => apiClient.listDatapoints(),
   });
 
   const conversationHistoryQuery = useQuery({
@@ -765,6 +841,69 @@ export function ChatInterface() {
       return table.columns.some((column) => column.name.toLowerCase().includes(search));
     });
   }, [schemaSearch, schemaTables]);
+
+  const pendingMetadataItems = useMemo(
+    () =>
+      filterMetadataItems(
+        (pendingMetadataQuery.data || []).map((item) =>
+          normalizeMetadataItem(item as unknown as Record<string, unknown>, "pending")
+        ),
+        metadataSearch
+      ),
+    [metadataSearch, pendingMetadataQuery.data]
+  );
+
+  const approvedMetadataItems = useMemo(
+    () =>
+      filterMetadataItems(
+        (approvedMetadataQuery.data || []).map((item) =>
+          normalizeMetadataItem(item as unknown as Record<string, unknown>, "approved")
+        ),
+        metadataSearch
+      ),
+    [approvedMetadataQuery.data, metadataSearch]
+  );
+
+  const managedMetadataItems = useMemo(
+    () =>
+      filterMetadataItems(
+        (managedMetadataQuery.data || []).map((item) => ({
+          id: item.datapoint_id,
+          name: item.name || item.datapoint_id,
+          type: item.type || "Unknown",
+          status: "managed" as const,
+          sourceTier: item.source_tier || null,
+          sourcePath: item.source_path || null,
+        })),
+        metadataSearch
+      ),
+    [managedMetadataQuery.data, metadataSearch]
+  );
+
+  const metadataLoading =
+    pendingMetadataQuery.isLoading ||
+    approvedMetadataQuery.isLoading ||
+    managedMetadataQuery.isLoading ||
+    pendingMetadataQuery.isFetching ||
+    approvedMetadataQuery.isFetching ||
+    managedMetadataQuery.isFetching;
+
+  const metadataError = useMemo(() => {
+    const firstError =
+      pendingMetadataQuery.error ||
+      approvedMetadataQuery.error ||
+      managedMetadataQuery.error;
+    if (!firstError) {
+      return null;
+    }
+    return firstError instanceof Error
+      ? firstError.message
+      : "Failed to load metadata explorer data.";
+  }, [
+    approvedMetadataQuery.error,
+    managedMetadataQuery.error,
+    pendingMetadataQuery.error,
+  ]);
 
   const sortedConversationHistory = useMemo(
     () =>
@@ -1686,13 +1825,22 @@ export function ChatInterface() {
 
           <SchemaExplorerSidebar
             isOpen={isSchemaSidebarOpen}
+            explorerMode={explorerMode}
             schemaSearch={schemaSearch}
+            metadataSearch={metadataSearch}
             schemaLoading={schemaLoading}
+            metadataLoading={metadataLoading}
             schemaError={schemaError}
+            metadataError={metadataError}
             filteredSchemaTables={filteredSchemaTables}
+            pendingMetadataItems={pendingMetadataItems}
+            approvedMetadataItems={approvedMetadataItems}
+            managedMetadataItems={managedMetadataItems}
             selectedSchemaTable={selectedSchemaTable}
             onToggle={() => setIsSchemaSidebarOpen((prev) => !prev)}
+            onExplorerModeChange={setExplorerMode}
             onSearchChange={handleSchemaSearchChange}
+            onMetadataSearchChange={setMetadataSearch}
             onSelectTable={handleSchemaSelectTable}
             onUseTable={handleSchemaUseTable}
           />
