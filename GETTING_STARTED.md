@@ -1,47 +1,63 @@
 # Getting Started with DataChat
 
-This guide reflects current, implemented behavior.
+This guide reflects current, implemented behavior in `datachat-community`.
 
-## 0. 5-Minute Path (Recommended for Evaluators)
+Supported database engines today:
+
+- PostgreSQL
+- MySQL
+- ClickHouse
+
+## 0. 5-Minute Path (Recommended)
 
 ```bash
 git clone https://github.com/onubrooks/datachat-community.git
 cd datachat-community
 cp .env.example .env
-# set DATABASE_URL + one LLM key in .env
+```
+
+Choose one database setup path:
+
+- Path A: set `DATABASE_URL` directly in `.env`.
+- Path B: use onboarding wizard (UI or CLI) to add a connection.
+
+Set one LLM provider key in `.env`, then run:
+
+```bash
 docker-compose up
 ```
 
-Then in a second terminal:
+In another terminal:
 
 ```bash
 datachat ask "list tables"
 ```
 
-If this succeeds, continue with the full guide below.
+If this works, continue with the detailed setup below.
 
 ---
 
-## 1. Decide Your Mode
+## 1. Choose Your Mode
 
 ### Mode A: Credentials-only (fastest)
 
 Use this when you want immediate querying with only DB credentials.
 
 Required:
+
 - `DATABASE_URL`
 - one LLM key (for example `LLM_OPENAI_API_KEY`)
-
-DataPoints are optional in this mode.
 
 ### Mode B: Registry + profiling (recommended for teams)
 
 Use this when you need:
+
 - multiple saved database connections
 - `target_database` routing
-- profiling + pending DataPoint review/approval
+- profiling + managed pending DataPoint review/approval
 
 Additional required env:
+
 - `SYSTEM_DATABASE_URL`
 - `DATABASE_CREDENTIALS_KEY` (Fernet key)
 
@@ -73,18 +89,21 @@ cd ..
 cp .env.example .env
 ```
 
-Minimum credentials-only example:
+Set one LLM key.
+
+For Mode A, set `DATABASE_URL` directly:
 
 ```env
 DATABASE_URL=postgresql://user:password@host:5432/your_database
 LLM_OPENAI_API_KEY=sk-...
 ```
 
-Optional registry/profiling add-ons:
+For Mode B, set registry env and add DB through wizard:
 
 ```env
 SYSTEM_DATABASE_URL=postgresql://user:password@host:5432/datachat
 DATABASE_CREDENTIALS_KEY=your_fernet_key
+LLM_OPENAI_API_KEY=sk-...
 ```
 
 Generate a Fernet key:
@@ -110,7 +129,7 @@ cd frontend
 npm run dev
 ```
 
-Or run both (if frontend deps are installed):
+Or run both:
 
 ```bash
 datachat dev
@@ -118,39 +137,39 @@ datachat dev
 
 ---
 
-## 5. Verify Setup
+## 5. Add Database (Wizard Path)
+
+If you did not set `DATABASE_URL`, add a database via wizard:
+
+- UI wizard: Databases page -> Quickstart/Onboarding
+- CLI wizard:
+
+```bash
+datachat onboarding wizard
+```
+
+Then validate:
 
 ```bash
 datachat status
 datachat ask "list tables"
 ```
 
-Expected:
-- database connectivity passes
-- query returns SQL/result or a targeted clarification
-
 ---
 
-## 6. Optional Setup Wizard
+## 6. Optional Setup Helpers
 
 ```bash
 datachat setup
 ```
 
-What it does today:
-- validates/saves database URLs
-- initializes runtime components
-- can trigger auto-profiling when registry prerequisites are present
-
-## 6.1 Quickstart Wrapper (Phase 1.4)
-
-Use this to run connect + setup in one command:
+Quickstart wrapper:
 
 ```bash
 datachat quickstart --database-url postgresql://user:pass@host:5432/db
 ```
 
-With optional demo load and first question:
+With demo load + first question:
 
 ```bash
 datachat quickstart \
@@ -161,9 +180,7 @@ datachat quickstart \
 
 ---
 
-## 7. Optional DataPoints (quality boost)
-
-DataPoints improve semantic accuracy for business questions.
+## 7. Optional DataPoints (Quality Boost)
 
 Load existing DataPoints:
 
@@ -171,32 +188,23 @@ Load existing DataPoints:
 datachat dp sync --datapoints-dir ./datapoints
 ```
 
-Review generated pending DataPoints (from profiling):
+Review generated pending DataPoints:
 
 ```bash
 datachat dp pending list
 datachat dp pending approve <pending_id>
 ```
 
-Thin training helper over existing flows:
-
-```bash
-# Wrapper over dp sync
-datachat train --mode sync --datapoints-dir ./datapoints
-
-# Wrapper over profile start (+ optional generation)
-datachat train --mode profile --profile-connection-id <connection_id> --generate-after-profile
-```
-
 ---
 
 ## 8. Multi-Database Routing (Optional)
 
-When registry is enabled, add connections and route per request:
+When registry mode is enabled, add connections and route per request:
+
 - API chat: `target_database` in `POST /api/v1/chat`
 - tools: `target_database` in `POST /api/v1/tools/execute`
 
-If `target_database` is sent while registry is unavailable, the request fails (no silent fallback).
+If `target_database` is sent while registry is unavailable, the request fails.
 
 See [`docs/MULTI_DATABASE.md`](docs/MULTI_DATABASE.md).
 
@@ -205,6 +213,7 @@ See [`docs/MULTI_DATABASE.md`](docs/MULTI_DATABASE.md).
 ## 9. What Works Without DataPoints
 
 Supported now:
+
 - table discovery
 - column discovery
 - row counts
@@ -212,6 +221,7 @@ Supported now:
 - SQL generation/execution from live schema context
 
 More limited without DataPoints:
+
 - strict KPI semantics (for example company-specific "revenue")
 - domain-specific business logic and definitions
 
@@ -222,6 +232,7 @@ See [`docs/CREDENTIALS_ONLY_MODE.md`](docs/CREDENTIALS_ONLY_MODE.md).
 ## 10. Known Product Boundaries
 
 Not fully implemented yet:
-- workspace/folder indexing as a production feature
-- runtime connectors for BigQuery/Redshift (templates exist, connectors pending)
-- automated Level 3-5 intelligence features
+
+- retrieval explainability UI/API (planned)
+- richer onboarding metadata quality signals (planned)
+- retrieval evaluation loop for context-only inspection (planned)
