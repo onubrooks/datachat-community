@@ -13,8 +13,8 @@ Use this before public announcements.
 
 - [ ] Fresh clone + env setup + startup completes.
 - [ ] First successful question asked in <= 5 minutes.
-- [ ] UI onboarding flow works (connection -> metadata generation -> first question).
-- [ ] CLI onboarding flow works (`datachat onboarding wizard`).
+- [ ] UI onboarding wizard flow works: connect DB -> generate metadata -> ask first question.
+- [ ] CLI onboarding wizard flow works: `datachat onboarding wizard`.
 
 ## Reliability Checks
 
@@ -24,13 +24,8 @@ Use this before public announcements.
 - [ ] Basic chat and SQL mode confirmed in UI.
 - [ ] Evidence/SQL/Table tabs render correctly for single and multi-question prompts.
 
-## Community Workflow
+## Release Control
 
-- [ ] `CONTRIBUTING.md` is current.
-- [ ] PR template is current.
-- [ ] Labels exist: `needs-private-cherry-pick`, `community-sync`, `scope-change`.
-
-## Release
-
-- [ ] Tag/commit selected for announcement is stable.
-- [ ] Announcement links tested (repo, docs, quickstart).
+- [ ] Freeze docs after final review.
+- [ ] Confirm release/announcement links.
+- [ ] Publish launch post and collect feedback.

@@ -1,27 +1,35 @@
 # DataChat
 
-DataChat solves the trust and speed gap between raw enterprise data and business decisions by turning fragmented data plus domain knowledge into governed, actionable, context-aware answers and workflows.
+DataChat helps teams move from raw database access to decision-ready answers by combining natural-language querying, SQL visibility, and evidence-backed outputs.
 
-DataChat is a decision workflow system for finance teams today, and an AI platform for business decision makers over time.
-
-DataChat lets you ask questions in plain English and get SQL, results, and clarifications. It supports a credentials-only path (no DataPoints required) and a richer path with DataPoints for business context.
+`datachat-community` is the open-source community edition focused on fast onboarding, practical workflows, and public iteration.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Next.js](https://img.shields.io/badge/next.js-15-black.svg)](https://nextjs.org/)
 
+---
+
+## Community Direction
+
+- Get new users to first useful answer in 5 minutes or less.
+- Keep workflows practical across both UI and CLI.
+- Improve answer trust with SQL transparency and evidence.
+- Improve DataPoint and retrieval quality in public, iterative releases.
+
+---
+
 ## Current Status (Implemented)
 
 - Natural-language query flow (`chat`, `ask`, `/api/v1/chat`) with SQL generation, validation, and execution.
-- Credentials-only mode: works without DataPoints using live schema + deterministic catalog queries.
-- Clarification flow with bounded retries (`--max-clarifications`, default `3` in CLI).
+- Credentials-only mode (no DataPoints required).
 - Multi-database registry with per-request routing via `target_database`.
 - Tools API (`/api/v1/tools`, `/api/v1/tools/execute`) with typed parameter schemas and policy checks.
 - Auto-profiling pipeline that generates pending DataPoints for review/approval.
 - Live schema mode notice when DataPoints are absent.
 - Right-sidebar schema/metadata explorer switch for table inspection and generated/managed DataPoint review.
+- Result surfaces across UI/CLI/API: answer, SQL, table, visualization, evidence, timing.
 
-Runtime connector support today:
 - PostgreSQL
 - MySQL
 - ClickHouse
@@ -32,24 +40,34 @@ Catalog/profiling SQL templates exist for additional engines (BigQuery, Redshift
 
 - Package-index distribution path (`pip install datachat`) with release automation.
 - Settings-first onboarding path (UI + CLI) to reduce `.env` editing during first setup.
+- Retrieval explainability views (why a DataPoint was selected).
+- Better onboarding metadata generation quality.
 - Retrieval evaluation and datapoint quality tooling (inspect retrieved context, label quality, and improve metadata loops).
 
 ---
 
-
 ## 5-Minute Quickstart
-
-If you only want first value fast:
 
 ```bash
 git clone https://github.com/onubrooks/datachat-community.git
 cd datachat-community
 cp .env.example .env
-# set DATABASE_URL + one LLM key in .env
+```
+
+Then choose one database setup path:
+
+- Path A (quickest): set `DATABASE_URL` directly in `.env`.
+- Path B (wizard): keep registry settings in `.env` and add database via UI/CLI onboarding wizard.
+
+Also set one LLM key in `.env` (OpenAI, Google, or Anthropic provider key).
+
+Start:
+
+```bash
 docker-compose up
 ```
 
-Then ask your first question:
+Validate:
 
 ```bash
 datachat ask "list tables"
@@ -67,7 +85,7 @@ or the UI onboarding flow from `/databases`.
 
 ---
 
-## Quick Start
+## Quick Start (Detailed)
 
 ### Using Docker Compose
 
@@ -78,19 +96,16 @@ cd datachat-community
 
 # 2. Configure env
 cp .env.example .env
-# Add at least: LLM API key + DATABASE_URL
+# Set one LLM key, then either:
+# - set DATABASE_URL directly, or
+# - use onboarding wizard to add a connection
 
 # 3. Start
 docker-compose up
 ```
 
-If `datachat --version` returns "command not found":
-
-```bash
-pip install -e .
-```
-
 Open:
+
 - Frontend: <http://localhost:3000>
 - Backend docs: <http://localhost:8000/docs>
 
@@ -113,33 +128,42 @@ datachat ask "list tables"
 
 ---
 
-## Credentials-Only First
+## Database Setup Paths
 
-You can start with only:
+### Path A: Credentials-only
+
+Set in `.env`:
 
 ```env
 DATABASE_URL=postgresql://user:pass@host:5432/db
 LLM_OPENAI_API_KEY=...
 ```
 
-DataPoints are optional but recommended for business metric precision and richer evidence.
+Use this when you want immediate querying with minimal setup.
 
-See:
-- [`docs/CREDENTIALS_ONLY_MODE.md`](docs/CREDENTIALS_ONLY_MODE.md)
-- [`GETTING_STARTED.md`](GETTING_STARTED.md)
+### Path B: Wizard-based connection setup
 
----
-
-## Multi-Database
-
-For stored connections + `target_database` routing, set:
+Set registry env in `.env`:
 
 ```env
 SYSTEM_DATABASE_URL=postgresql://.../datachat
 DATABASE_CREDENTIALS_KEY=... # Fernet key
 ```
 
-Then use `/api/v1/databases` to manage connections and pass `target_database` in `/api/v1/chat` or `/api/v1/tools/execute`.
+Then add the target connection using either:
+
+- UI onboarding wizard (Databases page), or
+- CLI wizard:
+
+```bash
+datachat onboarding wizard
+```
+
+---
+
+## Multi-Database
+
+When registry mode is enabled, use `/api/v1/databases` to manage saved connections and pass `target_database` in `/api/v1/chat` or `/api/v1/tools/execute`.
 
 See [`docs/MULTI_DATABASE.md`](docs/MULTI_DATABASE.md).
 
@@ -161,20 +185,13 @@ datachat ask --template sample-rows --table public.users
 # Direct SQL mode (read-only)
 datachat ask --execution-mode direct_sql "SELECT * FROM public.users LIMIT 10"
 
-# Schema explorer commands
+# Schema explorer
 datachat schema tables --search users
 datachat schema columns public.users
 datachat schema sample public.users --rows 10
 
-# Session management
-datachat chat --session-id onboarding
-datachat session list
-datachat session resume onboarding
-
-# Setup helper
+# System setup + status
 datachat setup
-
-# System status
 datachat status
 
 # DataPoints lifecycle
@@ -188,6 +205,7 @@ datachat dp pending approve <pending_id>
 ## API
 
 Core endpoints:
+
 - `POST /api/v1/chat`
 - `GET /api/v1/system/status`
 - `POST /api/v1/system/initialize`
