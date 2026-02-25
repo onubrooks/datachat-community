@@ -18,6 +18,10 @@ Then in a second terminal:
 datachat ask "list tables"
 ```
 
+Alternative setup path:
+- keep provider keys in `.env`, then run `datachat onboarding wizard` to guide DB setup
+- or use the UI onboarding flow in `/databases`
+
 If this succeeds, continue with the full guide below.
 
 ---

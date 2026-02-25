@@ -41,6 +41,7 @@ For operator/end-user instructions, see `docs/UI_HOWTO.md`.
 | Error Recovery | Retry button with error categorization | ✅ Implemented |
 | Conversation History Sidebar | Resume prior local sessions | ✅ Implemented |
 | Schema Explorer Sidebar | Browse tables/columns with search | ✅ Implemented |
+| Metadata Explorer Sidebar | Switchable schema/metadata view to inspect generated and managed DataPoints | ✅ Implemented |
 | Query Templates | Quick-action buttons for common prompts | ✅ Implemented |
 | SQL Editor Mode | Edit and run SQL drafts from composer or generated responses | ✅ Implemented |
 | SQL Mode Visualization Inference | Direct SQL responses infer chart type from result shape | ✅ Implemented |

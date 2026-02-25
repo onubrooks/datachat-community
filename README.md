@@ -10,16 +10,6 @@ DataChat lets you ask questions in plain English and get SQL, results, and clari
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Next.js](https://img.shields.io/badge/next.js-15-black.svg)](https://nextjs.org/)
 
----
-
-## Product Direction (Finance-First)
-
-- Current wedge: decision workflow system for finance teams.
-- Build model: finance workflow needs pull platform work (metadata ops, governance, traceability, and policy-safe agent execution).
-- Expansion rule: broaden beyond finance only after finance workflow quality bar in `docs/COMMUNITY_V0_1_SCOPE_LOCK.md` stays green.
-
----
-
 ## Current Status (Implemented)
 
 - Natural-language query flow (`chat`, `ask`, `/api/v1/chat`) with SQL generation, validation, and execution.
@@ -29,18 +19,20 @@ DataChat lets you ask questions in plain English and get SQL, results, and clari
 - Tools API (`/api/v1/tools`, `/api/v1/tools/execute`) with typed parameter schemas and policy checks.
 - Auto-profiling pipeline that generates pending DataPoints for review/approval.
 - Live schema mode notice when DataPoints are absent.
+- Right-sidebar schema/metadata explorer switch for table inspection and generated/managed DataPoint review.
 
 Runtime connector support today:
 - PostgreSQL
+- MySQL
 - ClickHouse
 
-Catalog/profiling SQL templates exist for additional engines (MySQL, BigQuery, Redshift), but live execution depends on connector implementation.
+Catalog/profiling SQL templates exist for additional engines (BigQuery, Redshift), but live execution depends on connector implementation.
 
-## Planned / Not Yet Implemented
+## Near-Term Planned Enhancements
 
-- Workspace/folder ingestion and codebase indexing as a first-class product feature.
-- Runtime connectors for MySQL, BigQuery, and Redshift.
-- Levels 3-5 capabilities (executable metric templates, optimization automation, anomaly/root-cause automation).
+- Package-index distribution path (`pip install datachat`) with release automation.
+- Settings-first onboarding path (UI + CLI) to reduce `.env` editing during first setup.
+- Retrieval evaluation and datapoint quality tooling (inspect retrieved context, label quality, and improve metadata loops).
 
 ---
 
@@ -64,6 +56,14 @@ datachat ask "list tables"
 ```
 
 Or open the UI at <http://localhost:3000> and ask in natural language.
+
+If you prefer guided setup, use either:
+
+```bash
+datachat onboarding wizard
+```
+
+or the UI onboarding flow from `/databases`.
 
 ---
 
@@ -221,6 +221,10 @@ ruff check .
 
 # Tests
 pytest -q
+
+# Frontend tests (fresh clone)
+cd frontend && npm ci
+npm run test -- --run src/components/chat/ChatInterface.test.tsx
 ```
 
 ---

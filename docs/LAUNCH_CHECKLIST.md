@@ -20,6 +20,7 @@ Use this before public announcements.
 
 - [ ] `ruff check .` passes.
 - [ ] Targeted test run passes (`pytest -q` or selected smoke suites).
+- [ ] Frontend deps installed before UI tests (`cd frontend && npm ci`).
 - [ ] Basic chat and SQL mode confirmed in UI.
 - [ ] Evidence/SQL/Table tabs render correctly for single and multi-question prompts.
 

@@ -6,6 +6,25 @@ For a quick verification pass, see `smoke_testing.md`.
 
 ---
 
+## Frontend Test Bootstrap (Required Once Per Clone)
+
+If you run frontend tests in a fresh clone, install frontend dependencies first:
+
+```bash
+cd frontend
+npm ci
+```
+
+Then run a targeted test:
+
+```bash
+npm run test -- --run src/components/chat/ChatInterface.test.tsx
+```
+
+If you see `vitest: command not found`, this means `frontend` deps are not installed yet. Run `npm ci` in `frontend` and retry.
+
+---
+
 ## Current Capability Demo (Base + Analyst)
 
 Use these to validate the system as it exists today (Levels 1–2).
