@@ -163,7 +163,7 @@ When modifying prompts:
 
 ## Resources
 
-- Full guide: See [PROMPTS.md](../PROMPTS.md) in docs/
+- Full guide: See [PROMPTS.md](PROMPTS.md) in docs/
 - Examples: See each prompt file's "Examples" section
 - Testing: See tests/prompts/ directory
 
