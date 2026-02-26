@@ -731,8 +731,12 @@ export function DatabaseManager() {
     }
   };
 
-  const handleGenerate = async (profileIdOverride?: string | null): Promise<boolean> => {
-    const profileId = profileIdOverride || job?.profile_id || null;
+  const handleGenerate = async (profileIdOverride?: unknown): Promise<boolean> => {
+    const normalizedProfileId =
+      typeof profileIdOverride === "string" && profileIdOverride.trim().length > 0
+        ? profileIdOverride
+        : null;
+    const profileId = normalizedProfileId || job?.profile_id || null;
     if (!profileId) {
       setError("Run profiling first to generate metadata.");
       return false;
@@ -2205,7 +2209,9 @@ export function DatabaseManager() {
                   </div>
                 )}
                 <Button
-                  onClick={handleGenerate}
+                  onClick={() => {
+                    void handleGenerate();
+                  }}
                   disabled={generationInProgress || !hasSelection}
                 >
                   {generationInProgress ? (
