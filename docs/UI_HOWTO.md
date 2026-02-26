@@ -264,6 +264,12 @@ Note:
 4. Select table subset and generation depth.
 5. Start DataPoint generation.
 
+Action difference:
+- **Generate DataPoints**: uses the latest existing profile for the selected connection. It does not rerun profiling.
+- **Profile + Generate (tool)**: runs a new profile first, then generates DataPoints from that fresh profile.
+- Use **Generate DataPoints** when profile results are already fresh.
+- Use **Profile + Generate (tool)** when schema/data changed or for first-time setup.
+
 ### 18.4 Review Pending DataPoints
 
 1. Open pending list.

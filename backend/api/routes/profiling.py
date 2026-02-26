@@ -398,7 +398,7 @@ async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJ
             )
 
             if payload.replace_existing:
-                await store.delete_pending_for_profile(profile.profile_id)
+                await store.delete_pending_for_connection(profile.connection_id)
 
             pending_items = [
                 PendingDataPoint(
@@ -410,6 +410,7 @@ async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJ
             ]
 
             await store.add_pending_datapoints(profile.profile_id, pending_items)
+            await store.dedupe_pending_for_connection(profile.connection_id)
             await store.update_generation_job(
                 job.job_id,
                 status="completed",

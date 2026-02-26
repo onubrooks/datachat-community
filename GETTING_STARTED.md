@@ -197,6 +197,12 @@ datachat quickstart \
 
 Load existing DataPoints:
 
+UI generation options:
+- **Generate DataPoints** reuses the latest completed profile and only runs metadata generation.
+- **Profile + Generate (tool)** reruns profiling first, then generates metadata from the fresh profile.
+- Prefer **Generate DataPoints** for speed when profile is current.
+- Prefer **Profile + Generate (tool)** after schema changes or during first setup.
+
 ```bash
 datachat dp sync --datapoints-dir ./datapoints
 ```

@@ -335,10 +335,24 @@ export function DatabaseManager() {
       api.listPendingDatapoints({
         statusFilter: "pending",
         connectionId: selectedManagedConnectionId,
-      }),
+    }),
     enabled: shouldFetchMetadataLists,
   });
-  const pending = pendingQuery.data ?? [];
+  const pending = useMemo(() => pendingQuery.data ?? [], [pendingQuery.data]);
+  const pendingVisible = useMemo(() => {
+    const seen = new Set<string>();
+    return pending.filter((item) => {
+      const datapoint = item.datapoint as Record<string, unknown>;
+      const rawId = datapoint?.datapoint_id;
+      const dedupeKey =
+        typeof rawId === "string" && rawId.trim().length > 0 ? rawId : item.pending_id;
+      if (seen.has(dedupeKey)) {
+        return false;
+      }
+      seen.add(dedupeKey);
+      return true;
+    });
+  }, [pending]);
 
   const approvedPendingQuery = useQuery({
     queryKey: ["approved-datapoints", selectedManagedConnectionId],
@@ -1022,8 +1036,8 @@ export function DatabaseManager() {
   const generationInProgress = jobs.generating || isJobInProgress(effectiveGenerationJob?.status);
   const syncInProgress = jobs.syncing || isJobInProgress(syncStatus?.status);
   const hasProfileCompleted = Boolean(job?.status === "completed" && job.profile_id);
-  const generatedCandidateCount = pending.length + approved.length;
-  const hasPendingDatapoints = pending.length > 0;
+  const generatedCandidateCount = pendingVisible.length + approved.length;
+  const hasPendingDatapoints = pendingVisible.length > 0;
   const hasApprovedDatapoints = approved.length > 0;
   const hasGeneratedMetadata = generatedCandidateCount > 0;
   const generationCompletedWithoutCandidates =
@@ -1119,10 +1133,10 @@ export function DatabaseManager() {
     if (quickstartConnection) {
       setSelectedConnectionId(quickstartConnection.connection_id);
     }
-    await emitEntryEvent("approve_pending", "started", { pending_count: pending.length });
+    await emitEntryEvent("approve_pending", "started", { pending_count: pendingVisible.length });
     const ok = await handleBulkApprove();
     await emitEntryEvent("approve_pending", ok ? "completed" : "failed", {
-      pending_count: pending.length,
+      pending_count: pendingVisible.length,
     });
     return ok;
   };
@@ -2472,7 +2486,7 @@ export function DatabaseManager() {
           <Button
             onClick={handleBulkApprove}
             disabled={
-              pending.length === 0 ||
+              pendingVisible.length === 0 ||
               jobs.bulkApproving ||
               !selectedConnection ||
               isEnvironmentConnection(selectedConnection)
@@ -2486,13 +2500,13 @@ export function DatabaseManager() {
             Select a managed connection to review pending profiling DataPoints.
           </p>
         )}
-        {pending.length === 0 && (
+        {pendingVisible.length === 0 && (
           <p className="text-sm text-muted-foreground">
             No pending DataPoints for the selected source.
           </p>
         )}
         <div className="space-y-3">
-          {pending.map((item) => (
+          {pendingVisible.map((item) => (
             <div key={item.pending_id} className="border-b border-border pb-3">
               <div className="text-sm font-medium">
                 {String(item.datapoint.name || item.datapoint.datapoint_id)}
