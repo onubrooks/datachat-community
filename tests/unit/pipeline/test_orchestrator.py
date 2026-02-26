@@ -2100,6 +2100,28 @@ class TestIntentGate:
         assert state["answer_source"] == "sql"
         assert state["answer_confidence"] == pytest.approx(0.95)
 
+    def test_normalize_answer_metadata_extracts_answer_from_double_fenced_json(self, pipeline):
+        state = {
+            "natural_language_answer": (
+                "``json\n"
+                "{\n"
+                '  "answer": "Normalized from double-fenced JSON.",\n'
+                '  "confidence": 0.91\n'
+                "}\n"
+                "``"
+            ),
+            "validated_sql": "SELECT 1",
+            "answer_source": None,
+            "answer_confidence": None,
+            "error": None,
+        }
+
+        pipeline._normalize_answer_metadata(state)
+
+        assert state["natural_language_answer"] == "Normalized from double-fenced JSON."
+        assert state["answer_source"] == "sql"
+        assert state["answer_confidence"] == pytest.approx(0.91)
+
 
 class TestStreaming:
     """Test streaming functionality."""

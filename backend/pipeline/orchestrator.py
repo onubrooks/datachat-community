@@ -4126,10 +4126,14 @@ class DataChatPipeline:
     def _extract_structured_answer_payload(self, text: str) -> dict[str, Any] | None:
         stripped = text.strip()
 
-        # Case 1: fenced JSON payload (the most common UI artifact form).
-        fenced = re.fullmatch(r"```(?:json)?\s*(\{[\s\S]*\})\s*```", stripped, re.IGNORECASE)
+        # Case 1: fenced JSON payload (supports ``json ... `` and ```json ... ``` forms).
+        fenced = re.fullmatch(
+            r"(?P<fence>`{2,})(?:json)?\s*(\{[\s\S]*\})\s*(?P=fence)",
+            stripped,
+            re.IGNORECASE,
+        )
         if fenced:
-            candidate = fenced.group(1)
+            candidate = fenced.group(2)
             try:
                 payload = json.loads(candidate)
                 if isinstance(payload, dict):
