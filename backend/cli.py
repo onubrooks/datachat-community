@@ -300,12 +300,15 @@ state = CLIState()
 # ============================================================================
 
 
-def _resolve_target_database_url(settings) -> tuple[str | None, str]:
+def _resolve_target_database_url(settings=None) -> tuple[str | None, str]:
     """Resolve target database URL with explicit precedence."""
-    if settings.database.url:
-        database_url = str(settings.database.url)
-        if not is_placeholder_database_url(database_url):
-            return database_url, "settings"
+    if settings is not None:
+        database_settings = getattr(settings, "database", None)
+        database_url_setting = getattr(database_settings, "url", None)
+        if database_url_setting:
+            database_url = str(database_url_setting)
+            if not is_placeholder_database_url(database_url):
+                return database_url, "settings"
 
     stored = state.get_connection_string()
     if stored and not is_placeholder_database_url(stored):
@@ -314,12 +317,15 @@ def _resolve_target_database_url(settings) -> tuple[str | None, str]:
     return None, "none"
 
 
-def _resolve_system_database_url(settings) -> tuple[str | None, str]:
+def _resolve_system_database_url(settings=None) -> tuple[str | None, str]:
     """Resolve system database URL with explicit precedence."""
-    if settings.system_database.url:
-        system_database_url = str(settings.system_database.url)
-        if not is_placeholder_database_url(system_database_url):
-            return system_database_url, "settings"
+    if settings is not None:
+        system_settings = getattr(settings, "system_database", None)
+        system_database_url_setting = getattr(system_settings, "url", None)
+        if system_database_url_setting:
+            system_database_url = str(system_database_url_setting)
+            if not is_placeholder_database_url(system_database_url):
+                return system_database_url, "settings"
 
     stored = state.get_system_database_url()
     if stored and not is_placeholder_database_url(stored):
@@ -3335,7 +3341,13 @@ def reset(
 
     async def run_reset() -> None:
         apply_config_defaults()
-        settings = get_settings()
+        settings = None
+        settings_load_error: str | None = None
+        try:
+            settings = get_settings()
+        except Exception as exc:
+            settings_load_error = str(exc)
+            clear_settings_cache()
 
         if drop_all_target and not include_target:
             raise click.ClickException("--drop-all-target requires --include-target.")
@@ -3353,27 +3365,44 @@ def reset(
                 console.print("[yellow]Reset cancelled.[/yellow]")
                 return
 
+        if settings_load_error:
+            console.print(
+                "[yellow]Runtime settings are invalid; continuing reset with saved config "
+                f"fallbacks. ({settings_load_error})[/yellow]"
+            )
+
         system_db_url, _ = _resolve_system_database_url(settings)
         if system_db_url:
             from urllib.parse import urlparse
 
-            parsed = urlparse(system_db_url)
-            connector = PostgresConnector(
-                host=parsed.hostname or "localhost",
-                port=parsed.port or 5432,
-                database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                user=parsed.username or "postgres",
-                password=parsed.password or "",
-            )
-            await connector.connect()
             try:
-                await connector.execute(
-                    "TRUNCATE database_connections, profiling_jobs, "
-                    "profiling_profiles, pending_datapoints"
+                system_db_type = infer_database_type(system_db_url)
+            except Exception:
+                console.print("[yellow]System DB URL is invalid; skipped registry reset.[/yellow]")
+                system_db_type = None
+            if system_db_type and system_db_type != "postgresql":
+                console.print(
+                    "[yellow]System DB reset currently supports PostgreSQL URLs only; "
+                    "skipped registry reset.[/yellow]"
                 )
-                console.print("[green]✓ System DB state cleared[/green]")
-            finally:
-                await connector.close()
+            elif system_db_type == "postgresql":
+                parsed = urlparse(system_db_url)
+                connector = PostgresConnector(
+                    host=parsed.hostname or "localhost",
+                    port=parsed.port or 5432,
+                    database=parsed.path.lstrip("/") if parsed.path else "datachat",
+                    user=parsed.username or "postgres",
+                    password=parsed.password or "",
+                )
+                await connector.connect()
+                try:
+                    await connector.execute(
+                        "TRUNCATE database_connections, profiling_jobs, "
+                        "profiling_profiles, pending_datapoints"
+                    )
+                    console.print("[green]✓ System DB state cleared[/green]")
+                finally:
+                    await connector.close()
         else:
             console.print("[yellow]System DB not configured; skipped registry reset.[/yellow]")
 
@@ -3382,43 +3411,58 @@ def reset(
             if not target_db_url:
                 console.print("[yellow]Target DB not configured; skipped target reset.[/yellow]")
             else:
-                target_db_type = infer_database_type(target_db_url)
-                connector = create_connector(
-                    database_url=target_db_url,
-                    database_type=target_db_type,
-                )
-                await connector.connect()
                 try:
-                    if drop_all_target:
-                        if target_db_type != "postgresql":
-                            raise click.ClickException(
-                                "--drop-all-target currently supports PostgreSQL only."
+                    target_db_type = infer_database_type(target_db_url)
+                except Exception:
+                    console.print("[yellow]Target DB URL is invalid; skipped target reset.[/yellow]")
+                    target_db_type = None
+                if target_db_type is None:
+                    target_db_url = None
+                if target_db_url is None:
+                    pass
+                else:
+                    connector = create_connector(
+                        database_url=target_db_url,
+                        database_type=target_db_type,
+                    )
+                    await connector.connect()
+                    try:
+                        if drop_all_target:
+                            if target_db_type != "postgresql":
+                                raise click.ClickException(
+                                    "--drop-all-target currently supports PostgreSQL only."
+                                )
+                            await connector.execute(
+                                """
+                                DO $$
+                                DECLARE r RECORD;
+                                BEGIN
+                                  FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public')
+                                  LOOP
+                                    EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename)
+                                    || ' CASCADE';
+                                  END LOOP;
+                                END $$;
+                                """
                             )
-                        await connector.execute(
-                            """
-                            DO $$
-                            DECLARE r RECORD;
-                            BEGIN
-                              FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public')
-                              LOOP
-                                EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename)
-                                || ' CASCADE';
-                              END LOOP;
-                            END $$;
-                            """
-                        )
-                        console.print("[green]✓ Target DB tables dropped[/green]")
-                    else:
-                        await _clear_demo_tables_for_database(connector, target_db_type)
-                        console.print("[green]✓ Target DB demo tables cleared[/green]")
-                finally:
-                    await connector.close()
+                            console.print("[green]✓ Target DB tables dropped[/green]")
+                        else:
+                            await _clear_demo_tables_for_database(connector, target_db_type)
+                            console.print("[green]✓ Target DB demo tables cleared[/green]")
+                    finally:
+                        await connector.close()
 
         if not keep_vectors:
             vector_store = VectorStore()
             await vector_store.initialize()
             await vector_store.clear()
-            shutil.rmtree(settings.chroma.persist_dir, ignore_errors=True)
+            persist_dir = Path(os.getenv("CHROMA_PERSIST_DIR", "chroma_data"))
+            if settings is not None:
+                chroma_settings = getattr(settings, "chroma", None)
+                chroma_persist_dir = getattr(chroma_settings, "persist_dir", None)
+                if chroma_persist_dir:
+                    persist_dir = Path(chroma_persist_dir)
+            shutil.rmtree(persist_dir, ignore_errors=True)
             console.print("[green]✓ Local vector store cleared[/green]")
 
         if clear_managed_datapoints:
