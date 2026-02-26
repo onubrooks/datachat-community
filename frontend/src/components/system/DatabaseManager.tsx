@@ -191,7 +191,7 @@ export function DatabaseManager() {
   const [depth, setDepth] = useState("metrics_basic");
   const [activeGenerationProfileId, setActiveGenerationProfileId] = useState<string | null>(null);
   const [activeGenerationJobId, setActiveGenerationJobId] = useState<string | null>(null);
-  const [generationFallbackJob, setGenerationFallbackJob] = useState<GenerationJob | null>(null);
+  const generationFallbackJobRef = useRef<GenerationJob | null>(null);
   const addConnectionRef = useRef<HTMLDivElement | null>(null);
   const previousGenerationStateRef = useRef<{ jobId: string; status: string } | null>(null);
 
@@ -395,7 +395,7 @@ export function DatabaseManager() {
     },
   });
   const generationJob = generationJobQuery.data ?? null;
-  const effectiveGenerationJob = generationJob ?? generationFallbackJob;
+  const effectiveGenerationJob = generationJob ?? generationFallbackJobRef.current;
 
   const isLoading =
     connectionsQuery.isLoading ||
@@ -442,10 +442,10 @@ export function DatabaseManager() {
     if (!generationJob) {
       return;
     }
-    setGenerationFallbackJob((current) => {
-      if (!current) {
-        return generationJob;
-      }
+    const current = generationFallbackJobRef.current;
+    if (!current) {
+      generationFallbackJobRef.current = generationJob;
+    } else {
       const sameJob = current.job_id === generationJob.job_id;
       const sameStatus = current.status === generationJob.status;
       const currentProgress = current.progress;
@@ -458,11 +458,10 @@ export function DatabaseManager() {
           currentProgress.tables_completed === nextProgress.tables_completed &&
           currentProgress.batch_size === nextProgress.batch_size);
       const sameError = (current.error || null) === (generationJob.error || null);
-      if (sameJob && sameStatus && sameProgress && sameError) {
-        return current;
+      if (!(sameJob && sameStatus && sameProgress && sameError)) {
+        generationFallbackJobRef.current = generationJob;
       }
-      return generationJob;
-    });
+    }
     if (isJobInProgress(generationJob.status)) {
       setActiveGenerationProfileId((current) =>
         current === generationJob.profile_id ? current : generationJob.profile_id
@@ -554,7 +553,7 @@ export function DatabaseManager() {
   useEffect(() => {
     setActiveGenerationProfileId(null);
     setActiveGenerationJobId(null);
-    setGenerationFallbackJob(null);
+    generationFallbackJobRef.current = null;
   }, [selectedManagedConnectionId]);
 
   useEffect(() => {
@@ -761,7 +760,7 @@ export function DatabaseManager() {
       queryClient.setQueryData(["generation-job", generation.job_id, profileId], generation);
       setActiveGenerationProfileId(profileId);
       setActiveGenerationJobId(generation.job_id);
-      setGenerationFallbackJob(generation);
+      generationFallbackJobRef.current = generation;
       await invalidateManagerQueries();
       return true;
     } catch (err) {
@@ -1381,7 +1380,7 @@ export function DatabaseManager() {
       sync: false,
     });
     setActiveGenerationProfileId(null);
-    setGenerationFallbackJob(null);
+    generationFallbackJobRef.current = null;
     previousGenerationStateRef.current = null;
     void invalidateManagerQueries();
   };

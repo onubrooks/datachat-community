@@ -335,7 +335,10 @@ export function ChatInterface() {
     },
   });
 
-  const canRunQueries = isInitialized;
+  const hasManagedConnection = connections.some(
+    (connection) => !(connection.tags || []).includes("env")
+  );
+  const canRunQueries = isInitialized || hasManagedConnection;
 
   const schemaQuery = useQuery({
     queryKey: ["database-schema", targetDatabaseId],
