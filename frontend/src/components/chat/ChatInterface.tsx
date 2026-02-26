@@ -58,7 +58,6 @@ import { formatWaitingChipLabel } from "./loadingUx";
 
 const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
 const CONVERSATION_HISTORY_STORAGE_KEY = "datachat.conversation.history.v1";
-const WORKFLOW_MODE_STORAGE_KEY = "datachat.workflow_mode.v1";
 const ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada";
 const MAX_CONVERSATION_HISTORY = 20;
 const MAX_CONVERSATION_MESSAGES = 50;
@@ -272,7 +271,6 @@ export function ChatInterface() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [targetDatabaseId, setTargetDatabaseId] = useState<string | null>(null);
   const [conversationDatabaseId, setConversationDatabaseId] = useState<string | null>(null);
-  const [workflowMode, setWorkflowMode] = useState<"auto" | "finance_variance_v1">("auto");
   const [resultLayoutMode, setResultLayoutMode] =
     useState<ResultLayoutMode>("stacked");
   const [showAgentTimingBreakdown, setShowAgentTimingBreakdown] = useState(true);
@@ -682,17 +680,6 @@ export function ChatInterface() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem(WORKFLOW_MODE_STORAGE_KEY);
-    if (saved === "finance_variance_v1" || saved === "auto") {
-      setWorkflowMode(saved);
-    }
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem(WORKFLOW_MODE_STORAGE_KEY, workflowMode);
-  }, [workflowMode]);
 
   useEffect(() => {
     const raw = window.localStorage.getItem(CONVERSATION_HISTORY_STORAGE_KEY);
@@ -1202,7 +1189,7 @@ export function ChatInterface() {
           session_summary: canReuseConversation ? sessionSummary : undefined,
           session_state: canReuseConversation ? sessionState : undefined,
           synthesize_simple_sql: synthesizeSimpleSql,
-          workflow_mode: workflowMode,
+          workflow_mode: "auto",
           ...(composerMode === "sql"
             ? {
                 execution_mode: "direct_sql" as const,
@@ -1696,21 +1683,6 @@ export function ChatInterface() {
                   ))}
                 </select>
               )}
-              <select
-                value={workflowMode}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  if (next === "finance_variance_v1" || next === "auto") {
-                    setWorkflowMode(next);
-                  }
-                }}
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                aria-label="Workflow mode"
-                disabled={isLoading}
-              >
-                <option value="auto">Workflow: Auto</option>
-                <option value="finance_variance_v1">Workflow: Finance Brief v1</option>
-              </select>
               <Button
                 variant="outline"
                 size="icon"
