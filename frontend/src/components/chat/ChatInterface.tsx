@@ -14,6 +14,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Send,
@@ -165,6 +166,8 @@ type MetadataExplorerItem = {
   payload?: Record<string, unknown> | null;
 };
 
+type TrainMode = "create" | "update";
+
 const normalizeMetadataItem = (
   item: Record<string, unknown>,
   status: "pending" | "approved"
@@ -267,6 +270,11 @@ const extractRelatedTablesFromSql = (sql: string): string[] => {
   return Array.from(new Set(cleaned));
 };
 
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+
 export function ChatInterface() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -344,14 +352,19 @@ export function ChatInterface() {
   const [composerMode, setComposerMode] = useState<"nl" | "sql">("nl");
   const [sqlDraft, setSqlDraft] = useState("");
   const [trainModalOpen, setTrainModalOpen] = useState(false);
+  const [trainMode, setTrainMode] = useState<TrainMode>("create");
+  const [trainTargetDatapointId, setTrainTargetDatapointId] = useState("");
   const [trainQuestion, setTrainQuestion] = useState("");
   const [trainSql, setTrainSql] = useState("");
   const [trainName, setTrainName] = useState("");
   const [trainNotes, setTrainNotes] = useState("");
   const [trainRelatedTables, setTrainRelatedTables] = useState("");
   const [trainSubmitting, setTrainSubmitting] = useState(false);
+  const [trainLoadingExisting, setTrainLoadingExisting] = useState(false);
+  const [trainSyncing, setTrainSyncing] = useState(false);
   const [trainError, setTrainError] = useState<string | null>(null);
   const [trainNotice, setTrainNotice] = useState<string | null>(null);
+  const [isClientMounted, setIsClientMounted] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const sqlEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -377,6 +390,11 @@ export function ChatInterface() {
   useEffect(() => {
     composerModeRef.current = composerMode;
   }, [composerMode]);
+
+  useEffect(() => {
+    setIsClientMounted(true);
+    return () => setIsClientMounted(false);
+  }, []);
 
   const bootstrapQuery = useQuery({
     queryKey: ["chat-bootstrap"],
@@ -1024,6 +1042,29 @@ export function ChatInterface() {
     return filterMetadataItems(items, metadataSearch);
   }, [managedMetadataInContextItems, metadataSearch, includeExampleMetadata]);
 
+  const trainManagedQueryOptions = useMemo(() => {
+    return managedMetadataInContextItems
+      .filter((item) => {
+        const tier = item.sourceTier?.toLowerCase();
+        return tier === "user" && item.type.toLowerCase() === "query";
+      })
+      .map((item) => ({
+        datapointId: item.id,
+        name: item.name,
+        connectionId: item.connectionId || null,
+        scope: item.scope || null,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [managedMetadataInContextItems]);
+
+  const selectedTrainManagedOption = useMemo(
+    () =>
+      trainManagedQueryOptions.find(
+        (item) => item.datapointId === trainTargetDatapointId
+      ) || null,
+    [trainManagedQueryOptions, trainTargetDatapointId]
+  );
+
   const approvedMetadataItems = useMemo(() => {
     const items = (approvedMetadataQuery.data || [])
       .map((item) =>
@@ -1423,6 +1464,8 @@ export function ChatInterface() {
     const fallbackQuestion = findSourceQuestionForMessage(payload.message_id);
     const nextQuestion = (payload.question || fallbackQuestion || "").trim();
     const related = extractRelatedTablesFromSql(payload.sql || "");
+    setTrainMode("create");
+    setTrainTargetDatapointId("");
     setTrainQuestion(nextQuestion);
     setTrainSql((payload.sql || "").trim());
     setTrainName(
@@ -1432,20 +1475,121 @@ export function ChatInterface() {
     );
     setTrainNotes("");
     setTrainRelatedTables(related.join(", "));
+    setTrainLoadingExisting(false);
+    setTrainSyncing(false);
     setTrainError(null);
     setTrainNotice(null);
     setTrainModalOpen(true);
   };
 
+  useEffect(() => {
+    if (!trainModalOpen || trainMode !== "update") {
+      return;
+    }
+    if (!trainManagedQueryOptions.length) {
+      setTrainError("No existing user-trained query datapoints found yet. Use Create New.");
+      return;
+    }
+
+    const nextDatapointId = trainTargetDatapointId || trainManagedQueryOptions[0].datapointId;
+    if (!trainTargetDatapointId) {
+      setTrainTargetDatapointId(nextDatapointId);
+      return;
+    }
+
+    let cancelled = false;
+    const loadExistingDatapoint = async () => {
+      setTrainLoadingExisting(true);
+      setTrainError(null);
+      try {
+        const datapoint = await apiClient.getDatapoint(nextDatapointId);
+        if (cancelled) {
+          return;
+        }
+        const metadata =
+          datapoint.metadata && typeof datapoint.metadata === "object"
+            ? (datapoint.metadata as Record<string, unknown>)
+            : {};
+        const loadedQuestion =
+          typeof metadata.trained_from_question === "string"
+            ? metadata.trained_from_question.trim()
+            : "";
+        const loadedSql =
+          typeof datapoint.sql_template === "string" ? datapoint.sql_template.trim() : "";
+        const loadedName = typeof datapoint.name === "string" ? datapoint.name.trim() : "";
+        const loadedNotes =
+          typeof metadata.training_note === "string"
+            ? metadata.training_note
+            : typeof datapoint.description === "string"
+              ? datapoint.description
+              : "";
+        const loadedRelated = Array.isArray(datapoint.related_tables)
+          ? datapoint.related_tables
+              .filter((entry): entry is string => typeof entry === "string")
+              .join(", ")
+          : "";
+
+        setTrainQuestion((current) => loadedQuestion || current);
+        setTrainSql((current) => loadedSql || current);
+        setTrainName((current) => loadedName || current);
+        setTrainNotes((current) => loadedNotes || current);
+        setTrainRelatedTables((current) =>
+          loadedRelated || extractRelatedTablesFromSql(loadedSql || current).join(", ")
+        );
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        setTrainError(
+          err instanceof Error ? err.message : "Failed to load selected datapoint."
+        );
+      } finally {
+        if (!cancelled) {
+          setTrainLoadingExisting(false);
+        }
+      }
+    };
+
+    void loadExistingDatapoint();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [trainManagedQueryOptions, trainModalOpen, trainMode, trainTargetDatapointId]);
+
+  const waitForSyncCompletion = useCallback(async (jobId: string): Promise<void> => {
+    const timeoutMs = 60_000;
+    const pollIntervalMs = 1_000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const status = await apiClient.getSyncStatus();
+      if (status.job_id === jobId) {
+        if (status.status === "completed") {
+          return;
+        }
+        if (status.status === "failed") {
+          throw new Error(status.error || "Sync failed while indexing training datapoint.");
+        }
+      }
+      await sleep(pollIntervalMs);
+    }
+    throw new Error("Sync is still running. Retry may not use the latest training yet.");
+  }, []);
+
   const handleSubmitTrainDatapoint = async () => {
     const sql = trainSql.trim();
     const question = trainQuestion.trim();
+    const isUpdateMode = trainMode === "update";
     if (!sql) {
       setTrainError("SQL is required to train a query datapoint.");
       return;
     }
     if (!question) {
       setTrainError("Question context is required.");
+      return;
+    }
+    if (isUpdateMode && !trainTargetDatapointId) {
+      setTrainError("Select an existing datapoint to update.");
       return;
     }
 
@@ -1458,14 +1602,15 @@ export function ChatInterface() {
     ).slice(0, 20);
 
     const connectionId =
-      metadataConnectionId &&
+      (isUpdateMode ? selectedTrainManagedOption?.connectionId || null : null) ||
+      (metadataConnectionId &&
       metadataConnectionId !== ENV_DATABASE_CONNECTION_ID
         ? metadataConnectionId
-        : null;
+        : null);
 
-    const datapointId = `query_user_trained_${slugifyDatapointToken(question)}_${String(
-      Date.now()
-    ).slice(-6)}`;
+    const datapointId = isUpdateMode
+      ? trainTargetDatapointId
+      : `query_user_trained_${slugifyDatapointToken(question)}_${String(Date.now()).slice(-6)}`;
     const trainingNote = trainNotes.trim();
     const payload: Record<string, unknown> = {
       datapoint_id: datapointId,
@@ -1499,17 +1644,54 @@ export function ChatInterface() {
 
     try {
       setTrainSubmitting(true);
+      setTrainSyncing(false);
       setTrainError(null);
-      await apiClient.createDatapoint(payload);
-      await queryClient.invalidateQueries({ queryKey: ["metadata-managed"] });
-      setTrainNotice("Datapoint saved. Re-running your question with the updated context...");
+      if (isUpdateMode) {
+        await apiClient.updateDatapoint(datapointId, payload);
+      } else {
+        await apiClient.createDatapoint(payload);
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["metadata-managed"] }),
+        queryClient.invalidateQueries({ queryKey: ["metadata-approved"] }),
+        queryClient.invalidateQueries({ queryKey: ["metadata-pending"] }),
+      ]);
+
+      let syncWarning: string | null = null;
+      try {
+        setTrainSyncing(true);
+        const syncJob = await apiClient.triggerSync({
+          ...(connectionId
+            ? { scope: "database" as const, connection_id: connectionId }
+            : { scope: "auto" as const }),
+          conflict_mode: "prefer_latest",
+        });
+        await waitForSyncCompletion(syncJob.job_id);
+      } catch (syncErr) {
+        syncWarning =
+          syncErr instanceof Error
+            ? syncErr.message
+            : "Sync is still in progress. Retry may not use the latest training yet.";
+      } finally {
+        setTrainSyncing(false);
+      }
+
+      setTrainNotice(
+        syncWarning
+          ? `${isUpdateMode ? "Datapoint updated" : "Datapoint created"}, but sync is still catching up.`
+          : `${isUpdateMode ? "Datapoint updated" : "Datapoint created"} and indexed. Re-running your question...`
+      );
       setTrainModalOpen(false);
+      setTrainMode("create");
+      setTrainTargetDatapointId("");
       setComposerMode("nl");
       await handleSend({ mode: "nl", message: question });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to create training datapoint.";
+      const message = err instanceof Error ? err.message : "Failed to save training datapoint.";
       setTrainError(message);
     } finally {
+      setTrainSyncing(false);
       setTrainSubmitting(false);
     }
   };
@@ -1712,6 +1894,17 @@ export function ChatInterface() {
   }, [trainNotice]);
 
   useEffect(() => {
+    if (!trainModalOpen) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [trainModalOpen]);
+
+  useEffect(() => {
     const handleGlobalShortcuts = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName?.toLowerCase();
@@ -1725,6 +1918,15 @@ export function ChatInterface() {
       const key = event.key.toLowerCase();
 
       if (event.key === "Escape") {
+        if (trainModalOpen) {
+          event.preventDefault();
+          if (!trainSubmitting) {
+            setTrainModalOpen(false);
+            setTrainError(null);
+          }
+          restoreInputFocus();
+          return;
+        }
         if (toolApprovalOpen) {
           event.preventDefault();
           setToolApprovalOpen(false);
@@ -1742,6 +1944,10 @@ export function ChatInterface() {
       if (hasModifier && key === "k") {
         event.preventDefault();
         restoreInputFocus();
+        return;
+      }
+
+      if (trainModalOpen) {
         return;
       }
 
@@ -1773,7 +1979,7 @@ export function ChatInterface() {
     return () => {
       window.removeEventListener("keydown", handleGlobalShortcuts);
     };
-  }, [restoreInputFocus, shortcutsOpen, toolApprovalOpen]);
+  }, [restoreInputFocus, shortcutsOpen, toolApprovalOpen, trainModalOpen, trainSubmitting]);
 
   const handleInitialize = async (
     databaseUrl: string,
@@ -2222,94 +2428,184 @@ export function ChatInterface() {
           />
         </div>
       </div>
-      {trainModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Train DataChat"
-        >
-          <div className="w-full max-w-2xl rounded-lg bg-background p-6 shadow-lg">
-            <h3 className="text-base font-semibold">Train DataChat</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Create a managed query datapoint from this answer, then retry the question.
-            </p>
-            <div className="mt-4 space-y-3">
-              <label className="block text-xs font-medium text-foreground">
-                Question context
-                <Input
-                  value={trainQuestion}
-                  onChange={(event) => setTrainQuestion(event.target.value)}
-                  placeholder="Which question should this datapoint answer?"
-                  className="mt-1"
-                />
-              </label>
-              <label className="block text-xs font-medium text-foreground">
-                SQL template
-                <textarea
-                  value={trainSql}
-                  onChange={(event) => setTrainSql(event.target.value)}
-                  className="mt-1 min-h-[140px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  placeholder="SELECT ..."
-                />
-              </label>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block text-xs font-medium text-foreground">
-                  Datapoint name
-                  <Input
-                    value={trainName}
-                    onChange={(event) => setTrainName(event.target.value)}
-                    placeholder="User-trained query datapoint"
-                    className="mt-1"
-                  />
-                </label>
-                <label className="block text-xs font-medium text-foreground">
-                  Related tables
-                  <Input
-                    value={trainRelatedTables}
-                    onChange={(event) => setTrainRelatedTables(event.target.value)}
-                    placeholder="public.table_a, public.table_b"
-                    className="mt-1"
-                  />
-                </label>
-              </div>
-              <label className="block text-xs font-medium text-foreground">
-                Notes (optional)
-                <textarea
-                  value={trainNotes}
-                  onChange={(event) => setTrainNotes(event.target.value)}
-                  className="mt-1 min-h-[90px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  placeholder="What was wrong and how should DataChat answer this next time?"
-                />
-              </label>
-              {trainError && (
-                <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  {trainError}
-                </div>
-              )}
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (trainSubmitting) {
-                    return;
-                  }
-                  setTrainModalOpen(false);
-                  setTrainError(null);
-                }}
-                disabled={trainSubmitting}
+      {isClientMounted &&
+        trainModalOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] overflow-y-auto bg-black/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Train DataChat"
+            onClick={() => {
+              if (!trainSubmitting) {
+                setTrainModalOpen(false);
+                setTrainError(null);
+              }
+            }}
+          >
+            <div className="flex min-h-full items-start justify-center py-6">
+              <div
+                className="w-full max-w-2xl rounded-lg bg-background p-6 shadow-xl"
+                onClick={(event) => event.stopPropagation()}
               >
-                Cancel
-              </Button>
-              <Button onClick={handleSubmitTrainDatapoint} disabled={trainSubmitting}>
-                {trainSubmitting ? <Loader2 size={14} className="mr-2 animate-spin" /> : null}
-                Save and Retry
-              </Button>
+                <h3 className="text-base font-semibold">Train DataChat</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Create or update a managed query datapoint, sync it, then retry the question.
+                </p>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTrainMode("create");
+                      setTrainTargetDatapointId("");
+                      setTrainError(null);
+                    }}
+                    className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
+                      trainMode === "create"
+                        ? "border-primary/50 bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    }`}
+                    disabled={trainSubmitting}
+                  >
+                    Create New
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTrainMode("update");
+                      setTrainError(null);
+                      if (!trainTargetDatapointId && trainManagedQueryOptions.length > 0) {
+                        setTrainTargetDatapointId(trainManagedQueryOptions[0].datapointId);
+                      }
+                    }}
+                    className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
+                      trainMode === "update"
+                        ? "border-primary/50 bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    }`}
+                    disabled={trainSubmitting}
+                  >
+                    Update Existing
+                  </button>
+                </div>
+
+                {trainMode === "update" && (
+                  <label className="mt-3 block text-xs font-medium text-foreground">
+                    Existing trained datapoint
+                    <select
+                      className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                      value={trainTargetDatapointId}
+                      onChange={(event) => {
+                        setTrainTargetDatapointId(event.target.value);
+                        setTrainError(null);
+                      }}
+                      disabled={trainSubmitting || trainLoadingExisting}
+                    >
+                      {!trainManagedQueryOptions.length && (
+                        <option value="">No user-trained query datapoints found</option>
+                      )}
+                      {trainManagedQueryOptions.map((item) => (
+                        <option key={item.datapointId} value={item.datapointId}>
+                          {item.name} ({item.datapointId})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
+                <div className="mt-4 max-h-[62vh] space-y-3 overflow-y-auto pr-1">
+                  <label className="block text-xs font-medium text-foreground">
+                    Question context
+                    <Input
+                      value={trainQuestion}
+                      onChange={(event) => setTrainQuestion(event.target.value)}
+                      placeholder="Which question should this datapoint answer?"
+                      className="mt-1"
+                      disabled={trainSubmitting || trainLoadingExisting}
+                    />
+                  </label>
+                  <label className="block text-xs font-medium text-foreground">
+                    SQL template
+                    <textarea
+                      value={trainSql}
+                      onChange={(event) => setTrainSql(event.target.value)}
+                      className="mt-1 min-h-[140px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      placeholder="SELECT ..."
+                      disabled={trainSubmitting || trainLoadingExisting}
+                    />
+                  </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="block text-xs font-medium text-foreground">
+                      Datapoint name
+                      <Input
+                        value={trainName}
+                        onChange={(event) => setTrainName(event.target.value)}
+                        placeholder="User-trained query datapoint"
+                        className="mt-1"
+                        disabled={trainSubmitting || trainLoadingExisting}
+                      />
+                    </label>
+                    <label className="block text-xs font-medium text-foreground">
+                      Related tables
+                      <Input
+                        value={trainRelatedTables}
+                        onChange={(event) => setTrainRelatedTables(event.target.value)}
+                        placeholder="public.table_a, public.table_b"
+                        className="mt-1"
+                        disabled={trainSubmitting || trainLoadingExisting}
+                      />
+                    </label>
+                  </div>
+                  <label className="block text-xs font-medium text-foreground">
+                    Notes (optional)
+                    <textarea
+                      value={trainNotes}
+                      onChange={(event) => setTrainNotes(event.target.value)}
+                      className="mt-1 min-h-[90px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      placeholder="What was wrong and how should DataChat answer this next time?"
+                      disabled={trainSubmitting || trainLoadingExisting}
+                    />
+                  </label>
+                </div>
+
+                {(trainLoadingExisting || trainSyncing) && (
+                  <div className="mt-3 inline-flex items-center gap-2 rounded-md border border-border/80 bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground">
+                    <Loader2 size={12} className="animate-spin" />
+                    {trainLoadingExisting ? "Loading existing training..." : "Syncing training datapoint..."}
+                  </div>
+                )}
+
+                {trainError && (
+                  <div className="mt-3 rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {trainError}
+                  </div>
+                )}
+
+                <div className="mt-5 flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (trainSubmitting) {
+                        return;
+                      }
+                      setTrainModalOpen(false);
+                      setTrainError(null);
+                    }}
+                    disabled={trainSubmitting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button onClick={handleSubmitTrainDatapoint} disabled={trainSubmitting}>
+                    {trainSubmitting ? <Loader2 size={14} className="mr-2 animate-spin" /> : null}
+                    {trainMode === "update" ? "Update, Sync, and Retry" : "Save, Sync, and Retry"}
+                  </Button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
       {shortcutsOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"

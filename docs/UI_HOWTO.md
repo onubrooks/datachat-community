@@ -205,17 +205,19 @@ Storage and usage:
 
 ### 15.1 Train DataChat from a Bad Answer
 
-When a response includes SQL, use the in-message **Train DataChat** action to create a managed Query DataPoint from that result:
+When a response includes SQL, use the in-message **Train DataChat** action to create or update a managed Query DataPoint from that result:
 
 1. Click **Train DataChat** on the assistant response.
-2. Confirm/edit question context and SQL template.
-3. Add optional notes and related tables.
-4. Click **Save and Retry** to persist the datapoint and re-run the question.
+2. Choose **Create New** or **Update Existing**.
+3. Confirm/edit question context and SQL template.
+4. Add optional notes and related tables.
+5. Click **Save, Sync, and Retry** (or **Update, Sync, and Retry**).
 
 Current behavior:
 
-- The training flow creates managed **Query** DataPoints.
-- The datapoint is saved through the managed DataPoint API and then reused by retrieval/runtime on the next run.
+- The training flow supports managed **Query** DataPoints.
+- The datapoint is saved through the managed DataPoint API, then a sync is triggered with `prefer_latest` conflict handling.
+- After sync completes, the original question is re-run so retrieval can use the updated artifact immediately.
 
 Planned extension:
 

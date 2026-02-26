@@ -983,11 +983,13 @@ export class DataChatAPI {
   async triggerSync(payload?: {
     scope?: "auto" | "global" | "database";
     connection_id?: string | null;
+    conflict_mode?: "error" | "prefer_user" | "prefer_managed" | "prefer_latest";
   }): Promise<{ job_id: string }> {
     const body = payload
       ? {
           ...(payload.scope ? { scope: payload.scope } : {}),
           ...(payload.connection_id ? { connection_id: payload.connection_id } : {}),
+          ...(payload.conflict_mode ? { conflict_mode: payload.conflict_mode } : {}),
         }
       : undefined;
     const response = await fetch(`${this.baseUrl}/api/v1/sync`, {
