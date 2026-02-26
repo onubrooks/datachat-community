@@ -267,6 +267,22 @@ class TestSchemaProfiler:
         assert "ORDER BY table_schema, table_name AND" not in executed_query
 
     @pytest.mark.asyncio
+    async def test_negative_row_estimate_is_treated_as_unknown(self, manager):
+        profiler = SchemaProfiler(manager)
+        conn = AsyncMock()
+        conn.fetchrow = AsyncMock(return_value={"estimate": -1})
+
+        estimate = await profiler._estimate_row_count(
+            conn,
+            "public",
+            "orders",
+            query_timeout_seconds=2,
+            row_estimate_query="SELECT -1 AS estimate",
+        )
+
+        assert estimate is None
+
+    @pytest.mark.asyncio
     async def test_fetch_tables_with_max_tables_handles_ordered_template(self, manager):
         profiler = SchemaProfiler(manager)
         conn = AsyncMock()

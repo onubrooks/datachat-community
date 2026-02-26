@@ -106,6 +106,12 @@ class DataPointGenerator:
             metadata["connection_id"] = connection_id
 
     @staticmethod
+    def _sanitize_row_count(value: int | None) -> int | None:
+        if value is None:
+            return None
+        return value if value >= 0 else None
+
+    @staticmethod
     def _contract_metadata(
         table: TableProfile,
         *,
@@ -279,7 +285,7 @@ class DataPointGenerator:
                 f"{table.schema_name}.{table.name} GROUP BY 1 ORDER BY 1;"
             )
 
-        row_count = table.row_count if table.row_count is not None and table.row_count >= 0 else None
+        row_count = self._sanitize_row_count(table.row_count)
         metadata = self._contract_metadata(
             table,
             source="auto-profiler-llm",
@@ -349,7 +355,7 @@ class DataPointGenerator:
             common_queries=[],
             gotchas=[],
             freshness="unknown",
-            row_count=table.row_count if table.row_count is not None else None,
+            row_count=self._sanitize_row_count(table.row_count),
             owner=_DEFAULT_OWNER,
             tags=["auto-profiled"],
             metadata=metadata,
@@ -790,7 +796,7 @@ class DataPointGenerator:
             "common_queries (array), gotchas (array), freshness (string or null), "
             "confidence (0-1), explanation (string).\n\n"
             f"Table: {table.schema_name}.{table.name}\n"
-            f"Row count (estimate): {table.row_count}\n"
+            f"Row count (estimate): {self._sanitize_row_count(table.row_count)}\n"
             f"Columns: {json.dumps(columns)}\n"
             f"Relationships: {json.dumps(relationships)}"
         )
@@ -837,6 +843,6 @@ class DataPointGenerator:
             "an array of objects with fields: name, calculation, aggregation, unit, "
             "synonyms, business_rules, confidence, explanation.\n\n"
             f"Table: {table.schema_name}.{table.name}\n"
-            f"Row count (estimate): {table.row_count}\n"
+            f"Row count (estimate): {self._sanitize_row_count(table.row_count)}\n"
             f"Numeric columns: {json.dumps(numeric_cols)}"
         )

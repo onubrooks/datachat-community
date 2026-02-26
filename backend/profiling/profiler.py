@@ -457,7 +457,8 @@ class SchemaProfiler:
             row = None
         if row is None:
             return None
-        return int(row["estimate"])
+        estimate = int(row["estimate"])
+        return estimate if estimate >= 0 else None
 
     async def _fetch_relationships(
         self,
