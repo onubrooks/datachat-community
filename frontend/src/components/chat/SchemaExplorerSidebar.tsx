@@ -338,7 +338,7 @@ export function SchemaExplorerSidebar({
                     checked={includeExampleMetadata}
                     onChange={(event) => onIncludeExampleMetadataChange(event.target.checked)}
                   />
-                  Include example metadata
+                  Include demo/example metadata
                 </label>
               </div>
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">

@@ -936,9 +936,13 @@ export function ChatInterface() {
               item.scope === "shared"
             );
           })
-          .filter((item) =>
-            includeExampleMetadata ? true : item.sourceTier?.toLowerCase() !== "example"
-          ),
+          .filter((item) => {
+            if (includeExampleMetadata) {
+              return true;
+            }
+            const tier = item.sourceTier?.toLowerCase();
+            return tier !== "example" && tier !== "demo";
+          }),
         metadataSearch
       ),
     [managedMetadataQuery.data, metadataSearch, targetDatabaseId, includeExampleMetadata]
@@ -1011,6 +1015,26 @@ export function ChatInterface() {
       if (item.payload) {
         setMetadataDetailCache((current) =>
           current[key] ? current : { ...current, [key]: item.payload as Record<string, unknown> }
+        );
+        return;
+      }
+
+      const sourceTier = item.sourceTier?.toLowerCase();
+      if (sourceTier === "example" || sourceTier === "demo") {
+        setMetadataDetailCache((current) =>
+          current[key]
+            ? current
+            : {
+                ...current,
+                [key]: {
+                  datapoint_id: item.id,
+                  type: item.type,
+                  name: item.name,
+                  source_tier: item.sourceTier,
+                  source_path: item.sourcePath,
+                  note: "This is a bundled reference datapoint and not an editable managed file.",
+                },
+              }
         );
         return;
       }
