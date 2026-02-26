@@ -332,6 +332,9 @@ export function ChatInterface() {
     },
   });
 
+  const hasConfiguredConnection = connections.length > 0;
+  const canRunQueries = isInitialized || hasConfiguredConnection;
+
   const schemaQuery = useQuery({
     queryKey: ["database-schema", targetDatabaseId],
     queryFn: async () => apiClient.getDatabaseSchema(targetDatabaseId as string),
@@ -1045,7 +1048,7 @@ export function ChatInterface() {
   const handleSend = async () => {
     const naturalLanguageQuery = input.trim();
     const sqlQuery = sqlDraft.trim();
-    if (isLoading || !isInitialized) return;
+    if (isLoading || !canRunQueries) return;
     if (composerMode === "nl" && !naturalLanguageQuery) return;
     if (composerMode === "sql" && !sqlQuery) return;
 
@@ -1676,7 +1679,7 @@ export function ChatInterface() {
                 aria-label="Chat message stream"
                 className="mx-auto w-full max-w-5xl"
               >
-              {!isInitialized && !setupCompleted && (
+              {!canRunQueries && !setupCompleted && (
                 <SystemSetup
                   steps={setupSteps}
                   onInitialize={handleInitialize}
@@ -1685,7 +1688,7 @@ export function ChatInterface() {
                   notice={setupNotice}
                 />
               )}
-              {!isInitialized && setupCompleted && (
+              {!canRunQueries && setupCompleted && (
                 <div className="mb-4 rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                   Setup saved. Add DataPoints from{" "}
                   <Link href="/databases" className="underline">
@@ -1819,7 +1822,7 @@ export function ChatInterface() {
                     type="button"
                     onClick={() => handleApplyTemplate(template.id)}
                     className="rounded-full border border-border/70 bg-background/80 px-3 py-1 text-xs text-foreground/90 shadow-sm transition hover:bg-muted"
-                    disabled={isLoading || !isInitialized}
+                    disabled={isLoading || !canRunQueries}
                   >
                     {template.label}
                   </button>
@@ -1863,13 +1866,13 @@ export function ChatInterface() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyPress}
                     placeholder="Ask a question about your data..."
-                    disabled={isLoading || !isInitialized}
+                    disabled={isLoading || !canRunQueries}
                     className="flex-1"
                     aria-label="Chat query input"
                   />
                   <Button
                     onClick={handleSend}
-                    disabled={!input.trim() || isLoading || !isInitialized}
+                    disabled={!input.trim() || isLoading || !canRunQueries}
                     size="icon"
                     aria-label="Send chat message"
                   >
@@ -1888,7 +1891,7 @@ export function ChatInterface() {
                     onChange={(event) => setSqlDraft(event.target.value)}
                     onKeyDown={handleSqlEditorKeyPress}
                     placeholder="SELECT * FROM your_table LIMIT 10;"
-                    disabled={isLoading || !isInitialized}
+                    disabled={isLoading || !canRunQueries}
                     className="min-h-[120px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                     aria-label="SQL editor input"
                   />
@@ -1898,7 +1901,7 @@ export function ChatInterface() {
                     </p>
                     <Button
                       onClick={handleSend}
-                      disabled={!sqlDraft.trim() || isLoading || !isInitialized}
+                      disabled={!sqlDraft.trim() || isLoading || !canRunQueries}
                       size="sm"
                       aria-label="Run SQL draft"
                     >
