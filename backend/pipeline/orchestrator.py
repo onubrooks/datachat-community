@@ -5005,6 +5005,7 @@ class DataChatPipeline:
 
     def _normalize_answer_metadata(self, state: PipelineState) -> None:
         """Ensure answer source/confidence are consistently populated."""
+        self._normalize_primary_answer_text(state)
         source = state.get("answer_source")
         if not source:
             if state.get("tool_approval_required"):
@@ -5041,6 +5042,26 @@ class DataChatPipeline:
         else:
             confidence = float(state.get("answer_confidence", 0.5))
             state["answer_confidence"] = max(0.0, min(1.0, confidence))
+
+    def _normalize_primary_answer_text(self, state: PipelineState) -> None:
+        """Normalize natural_language_answer when a model returns structured JSON payload text."""
+        raw_answer = state.get("natural_language_answer")
+        text = str(raw_answer or "").strip()
+        if not text:
+            return
+
+        payload = self._extract_structured_answer_payload(text)
+        if payload is None:
+            return
+
+        answer = payload.get("answer")
+        if isinstance(answer, str) and answer.strip():
+            state["natural_language_answer"] = answer.strip()
+
+        if state.get("answer_confidence") is None:
+            confidence = payload.get("confidence")
+            if isinstance(confidence, (int, float)):
+                state["answer_confidence"] = max(0.0, min(1.0, float(confidence)))
 
 
 # ============================================================================
