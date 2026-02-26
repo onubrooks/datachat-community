@@ -5,7 +5,7 @@ Run from repo root (`datachat` or `datachat-community`).
 ## 1) Clear synced state only (recommended during UI testing)
 
 Clears:
-- system DB runtime state
+- system DB runtime state (drops non-DataChat tables in `public`, truncates DataChat-owned tables)
 - vector store + knowledge graph
 
 Keeps:

@@ -56,10 +56,10 @@ cp .env.example .env
 
 Then choose one database setup path:
 
-- Path A (quickest): set `DATABASE_URL` directly in `.env`.
-- Path B (wizard): keep registry settings in `.env` and add database via UI/CLI onboarding wizard.
+- Path A (quickest): set `DATABASE_URL` and one LLM provider key directly in `.env`.
+- Path B (wizard): start the app, set LLM provider + API key in **Settings**, then add target DB in the onboarding wizard.
 
-LLM keys and provider can now be set in **Settings** after startup (or pre-set in `.env`).
+`SYSTEM_DATABASE_URL` is optional for basic querying. Add/save it in **Settings** when you want managed connections, profiling, and metadata generation.
 
 Start:
 

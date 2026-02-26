@@ -671,6 +671,59 @@ async def _clear_demo_tables_for_database(
         await connector.execute(statement)
 
 
+_SYSTEM_DB_ALLOWED_TABLES: tuple[str, ...] = (
+    "database_connections",
+    "profiling_jobs",
+    "profiling_profiles",
+    "pending_datapoints",
+    "datapoint_generation_jobs",
+    "ui_feedback",
+    "ui_conversations",
+)
+
+
+async def _reset_system_database_postgres(connector: PostgresConnector) -> None:
+    """Drop non-DataChat tables and clear DataChat-owned tables in the system DB."""
+    allowed_literal = ", ".join(f"'{name}'" for name in _SYSTEM_DB_ALLOWED_TABLES)
+    await connector.execute(
+        f"""
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN (
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'public'
+          )
+          LOOP
+            IF r.tablename = ANY (ARRAY[{allowed_literal}]) THEN
+              CONTINUE;
+            END IF;
+            EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+          END LOOP;
+        END $$;
+        """
+    )
+    await connector.execute(
+        f"""
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN (
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'public'
+              AND tablename = ANY (ARRAY[{allowed_literal}])
+          )
+          LOOP
+            EXECUTE
+              'TRUNCATE TABLE public.' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE';
+          END LOOP;
+        END $$;
+        """
+    )
+
+
 async def create_pipeline_from_config(
     *,
     database_type: str | None = None,
@@ -3396,11 +3449,11 @@ def reset(
                 )
                 await connector.connect()
                 try:
-                    await connector.execute(
-                        "TRUNCATE database_connections, profiling_jobs, "
-                        "profiling_profiles, pending_datapoints"
+                    await _reset_system_database_postgres(connector)
+                    console.print(
+                        "[green]✓ System DB state cleared "
+                        "(non-DataChat tables dropped, DataChat tables truncated)[/green]"
                     )
-                    console.print("[green]✓ System DB state cleared[/green]")
                 finally:
                     await connector.close()
         else:

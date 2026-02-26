@@ -313,6 +313,7 @@ export function DatabaseManager() {
     selectedConnectionPreview && !isEnvironmentConnection(selectedConnectionPreview)
       ? selectedConnectionPreview.connection_id
       : null;
+  const shouldFetchMetadataLists = Boolean(selectedManagedConnectionId) && !activeGenerationJobId;
 
   const profilingJobQuery = useQuery({
     queryKey: ["profiling-job-latest", selectedManagedConnectionId],
@@ -335,7 +336,7 @@ export function DatabaseManager() {
         statusFilter: "pending",
         connectionId: selectedManagedConnectionId,
       }),
-    enabled: Boolean(selectedManagedConnectionId),
+    enabled: shouldFetchMetadataLists,
   });
   const pending = pendingQuery.data ?? [];
 
@@ -346,7 +347,7 @@ export function DatabaseManager() {
         statusFilter: "approved",
         connectionId: selectedManagedConnectionId,
       }),
-    enabled: Boolean(selectedManagedConnectionId),
+    enabled: shouldFetchMetadataLists,
   });
   const approved = useMemo(
     () => mapPendingToSummary(approvedPendingQuery.data ?? []),

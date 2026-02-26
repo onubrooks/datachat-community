@@ -461,6 +461,40 @@ class TestResetCommand:
             "DROP TABLE IF EXISTS users",
         ]
 
+    def test_reset_system_db_drops_non_datachat_tables(self, runner):
+        settings = self._make_settings()
+        system_connector = AsyncMock()
+        system_connector.connect = AsyncMock()
+        system_connector.execute = AsyncMock()
+        system_connector.close = AsyncMock()
+
+        with (
+            patch("backend.cli.apply_config_defaults"),
+            patch("backend.cli.get_settings", return_value=settings),
+            patch(
+                "backend.cli._resolve_system_database_url",
+                return_value=("postgresql://postgres:@localhost:5432/datachat", "settings"),
+            ),
+            patch("backend.cli._resolve_target_database_url", return_value=(None, "none")),
+            patch("backend.cli.PostgresConnector", return_value=system_connector),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "reset",
+                    "--yes",
+                    "--keep-vectors",
+                    "--keep-config",
+                    "--keep-managed-datapoints",
+                    "--keep-user-datapoints",
+                ],
+            )
+
+        assert result.exit_code == 0
+        executed = [call.args[0] for call in system_connector.execute.await_args_list]
+        assert any("DROP TABLE IF EXISTS public." in statement for statement in executed)
+        assert any("TRUNCATE TABLE public." in statement for statement in executed)
+
     def test_reset_survives_invalid_runtime_settings(self, runner):
         with (
             patch("backend.cli.apply_config_defaults"),

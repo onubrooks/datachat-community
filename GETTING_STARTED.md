@@ -18,10 +18,10 @@ cp .env.example .env
 
 Choose one database setup path:
 
-- Path A: set `DATABASE_URL` directly in `.env`.
-- Path B: use onboarding wizard (UI or CLI) to add a connection.
+- Path A: set `DATABASE_URL` and one LLM provider key directly in `.env`.
+- Path B: start the app, set LLM provider + API key in **Settings**, then use onboarding wizard (UI or CLI) to add a connection.
 
-Set one LLM provider key in `.env`, or add it later in **Settings**.
+`SYSTEM_DATABASE_URL` is optional for basic querying, and can be added/saved in **Settings** when you want managed profiling + metadata generation.
 Then run:
 
 ```bash
