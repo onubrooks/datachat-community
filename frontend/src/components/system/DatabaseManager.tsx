@@ -442,19 +442,43 @@ export function DatabaseManager() {
     if (!generationJob) {
       return;
     }
-    setGenerationFallbackJob(generationJob);
+    setGenerationFallbackJob((current) => {
+      if (!current) {
+        return generationJob;
+      }
+      const sameJob = current.job_id === generationJob.job_id;
+      const sameStatus = current.status === generationJob.status;
+      const currentProgress = current.progress;
+      const nextProgress = generationJob.progress;
+      const sameProgress =
+        (!currentProgress && !nextProgress) ||
+        (!!currentProgress &&
+          !!nextProgress &&
+          currentProgress.total_tables === nextProgress.total_tables &&
+          currentProgress.tables_completed === nextProgress.tables_completed &&
+          currentProgress.batch_size === nextProgress.batch_size);
+      const sameError = (current.error || null) === (generationJob.error || null);
+      if (sameJob && sameStatus && sameProgress && sameError) {
+        return current;
+      }
+      return generationJob;
+    });
     if (isJobInProgress(generationJob.status)) {
-      setActiveGenerationProfileId(generationJob.profile_id);
-      setActiveGenerationJobId(generationJob.job_id);
+      setActiveGenerationProfileId((current) =>
+        current === generationJob.profile_id ? current : generationJob.profile_id
+      );
+      setActiveGenerationJobId((current) =>
+        current === generationJob.job_id ? current : generationJob.job_id
+      );
       return;
     }
-    if (activeGenerationJobId && generationJob.job_id === activeGenerationJobId) {
-      setActiveGenerationJobId(null);
-    }
-    if (activeGenerationProfileId && generationJob.profile_id === activeGenerationProfileId) {
-      setActiveGenerationProfileId(null);
-    }
-  }, [generationJob, activeGenerationJobId, activeGenerationProfileId]);
+    setActiveGenerationJobId((current) =>
+      current === generationJob.job_id ? null : current
+    );
+    setActiveGenerationProfileId((current) =>
+      current === generationJob.profile_id ? null : current
+    );
+  }, [generationJob]);
 
   const handleToolProfile = async () => {
     setToolApprovalOpen(true);
