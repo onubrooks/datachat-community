@@ -52,6 +52,30 @@ _CONFIG_TO_ENV = {
     LLM_TEMPERATURE: "LLM_TEMPERATURE",
 }
 
+_DB_CONFIG_KEYS = {TARGET_DB_KEY, SYSTEM_DB_KEY}
+_DB_PLACEHOLDER_URLS = {
+    "postgresql://user:pass@localhost:5432/testdb",
+    "postgresql://user:pass@host:5432/database",
+    "mysql://user:pass@host:3306/database",
+    "clickhouse://user:pass@host:8123/database",
+}
+
+
+def is_placeholder_database_url(value: str | None) -> bool:
+    """Return True when value is a known sample/placeholder database URL."""
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if not normalized:
+        return False
+    if normalized in _DB_PLACEHOLDER_URLS:
+        return True
+    # Common placeholder shape used in setup examples.
+    return (
+        "://user:pass@" in normalized
+        and (normalized.endswith("/testdb") or normalized.endswith("/database"))
+    )
+
 
 def _ensure_dir() -> None:
     CONFIG_DIR.mkdir(exist_ok=True, mode=0o700)
@@ -75,7 +99,10 @@ def save_config(config: dict[str, Any]) -> None:
 
 def set_value(key: str, value: str | None) -> None:
     config = load_config()
-    if value is None or str(value).strip() == "":
+    normalized = str(value).strip() if value is not None else ""
+    if key in _DB_CONFIG_KEYS and is_placeholder_database_url(normalized):
+        config.pop(key, None)
+    elif value is None or normalized == "":
         config.pop(key, None)
     else:
         config[key] = value
@@ -85,7 +112,10 @@ def set_value(key: str, value: str | None) -> None:
 def set_values(values: dict[str, str | None]) -> None:
     config = load_config()
     for key, value in values.items():
-        if value is None or str(value).strip() == "":
+        normalized = str(value).strip() if value is not None else ""
+        if key in _DB_CONFIG_KEYS and is_placeholder_database_url(normalized):
+            config.pop(key, None)
+        elif value is None or normalized == "":
             config.pop(key, None)
         else:
             config[key] = value
@@ -109,6 +139,12 @@ def apply_config_defaults() -> None:
 
     for config_key, env_key in _CONFIG_TO_ENV.items():
         env_value = os.getenv(env_key)
+        if (
+            config_key in _DB_CONFIG_KEYS
+            and env_value
+            and is_placeholder_database_url(env_value)
+        ):
+            continue
         if env_value and config.get(config_key) != env_value:
             config[config_key] = env_value
 
@@ -116,7 +152,11 @@ def apply_config_defaults() -> None:
         save_config(config)
 
     for config_key, env_key in _CONFIG_TO_ENV.items():
-        if not os.getenv(env_key) and config.get(config_key):
+        env_value = os.getenv(env_key)
+        env_missing_or_placeholder = not env_value or (
+            config_key in _DB_CONFIG_KEYS and is_placeholder_database_url(env_value)
+        )
+        if env_missing_or_placeholder and config.get(config_key):
             os.environ[env_key] = str(config[config_key])
 
 

@@ -43,6 +43,7 @@ from backend.settings_store import (
     TARGET_DB_KEY,
     apply_config_defaults,
     clear_config,
+    is_placeholder_database_url,
     load_config,
     set_value,
     set_values,
@@ -110,12 +111,21 @@ def _preview_secret(value: str | None) -> str | None:
 
 
 def _resolve_runtime_setting(
-    config: dict[str, str], *, env_var: str, config_key: str, default: str | None = None
+    config: dict[str, str],
+    *,
+    env_var: str,
+    config_key: str,
+    default: str | None = None,
+    ignore_placeholder_database_url: bool = False,
 ) -> tuple[str | None, str]:
     env_value = os.getenv(env_var)
+    if ignore_placeholder_database_url and is_placeholder_database_url(env_value):
+        env_value = None
     if env_value:
         return env_value, "env"
     config_value = config.get(config_key)
+    if ignore_placeholder_database_url and is_placeholder_database_url(str(config_value)):
+        config_value = None
     if config_value:
         return str(config_value), "config"
     return default, "default" if default is not None else "missing"
@@ -143,10 +153,16 @@ async def system_settings() -> RuntimeSettingsResponse:
     config = load_config()
 
     target_url, target_source = _resolve_runtime_setting(
-        config, env_var="DATABASE_URL", config_key=TARGET_DB_KEY
+        config,
+        env_var="DATABASE_URL",
+        config_key=TARGET_DB_KEY,
+        ignore_placeholder_database_url=True,
     )
     system_url, system_source = _resolve_runtime_setting(
-        config, env_var="SYSTEM_DATABASE_URL", config_key=SYSTEM_DB_KEY
+        config,
+        env_var="SYSTEM_DATABASE_URL",
+        config_key=SYSTEM_DB_KEY,
+        ignore_placeholder_database_url=True,
     )
     llm_provider, provider_source = _resolve_runtime_setting(
         config,
@@ -252,9 +268,11 @@ async def system_settings() -> RuntimeSettingsResponse:
 async def update_system_settings(payload: RuntimeSettingsUpdateRequest) -> RuntimeSettingsResponse:
     updates: dict[str, str | None] = {}
     if payload.target_database_url is not None:
-        updates[TARGET_DB_KEY] = payload.target_database_url.strip()
+        target_url = payload.target_database_url.strip()
+        updates[TARGET_DB_KEY] = None if is_placeholder_database_url(target_url) else target_url
     if payload.system_database_url is not None:
-        updates[SYSTEM_DB_KEY] = payload.system_database_url.strip()
+        system_url = payload.system_database_url.strip()
+        updates[SYSTEM_DB_KEY] = None if is_placeholder_database_url(system_url) else system_url
     if payload.llm_default_provider is not None:
         updates[LLM_DEFAULT_PROVIDER_KEY] = payload.llm_default_provider.strip().lower()
     if payload.llm_openai_model is not None:
@@ -324,17 +342,23 @@ async def system_initialize(
     from backend.api.main import app_state
 
     initializer = SystemInitializer(app_state)
+    sanitized_database_url = payload.database_url
+    sanitized_system_database_url = payload.system_database_url
+    if is_placeholder_database_url(sanitized_database_url):
+        sanitized_database_url = None
+    if is_placeholder_database_url(sanitized_system_database_url):
+        sanitized_system_database_url = None
 
     try:
-        if payload.database_url:
-            set_value(TARGET_DB_KEY, payload.database_url)
-        if payload.system_database_url:
-            set_value(SYSTEM_DB_KEY, payload.system_database_url)
+        if sanitized_database_url:
+            set_value(TARGET_DB_KEY, sanitized_database_url)
+        if sanitized_system_database_url:
+            set_value(SYSTEM_DB_KEY, sanitized_system_database_url)
         apply_config_defaults()
         status_state, message = await initializer.initialize(
-            database_url=payload.database_url,
+            database_url=sanitized_database_url,
             auto_profile=payload.auto_profile,
-            system_database_url=payload.system_database_url,
+            system_database_url=sanitized_system_database_url,
         )
     except Exception as exc:
         raise HTTPException(

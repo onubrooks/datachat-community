@@ -73,7 +73,7 @@ from backend.models.datapoint import DataPoint
 from backend.pipeline.orchestrator import DataChatPipeline
 from backend.profiling.generator import DataPointGenerator
 from backend.profiling.profiler import SchemaProfiler
-from backend.settings_store import apply_config_defaults
+from backend.settings_store import apply_config_defaults, is_placeholder_database_url
 from backend.sync.orchestrator import save_datapoint_to_disk
 from backend.tools import ToolExecutor, initialize_tools
 from backend.tools.base import ToolContext
@@ -303,10 +303,12 @@ state = CLIState()
 def _resolve_target_database_url(settings) -> tuple[str | None, str]:
     """Resolve target database URL with explicit precedence."""
     if settings.database.url:
-        return str(settings.database.url), "settings"
+        database_url = str(settings.database.url)
+        if not is_placeholder_database_url(database_url):
+            return database_url, "settings"
 
     stored = state.get_connection_string()
-    if stored:
+    if stored and not is_placeholder_database_url(stored):
         return stored, "saved_config"
 
     return None, "none"
@@ -315,10 +317,12 @@ def _resolve_target_database_url(settings) -> tuple[str | None, str]:
 def _resolve_system_database_url(settings) -> tuple[str | None, str]:
     """Resolve system database URL with explicit precedence."""
     if settings.system_database.url:
-        return str(settings.system_database.url), "settings"
+        system_database_url = str(settings.system_database.url)
+        if not is_placeholder_database_url(system_database_url):
+            return system_database_url, "settings"
 
     stored = state.get_system_database_url()
-    if stored:
+    if stored and not is_placeholder_database_url(stored):
         return stored, "saved_config"
 
     return None, "none"
