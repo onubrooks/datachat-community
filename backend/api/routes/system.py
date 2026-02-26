@@ -423,6 +423,16 @@ async def system_reset(request: Request) -> SystemResetResponse:
     if managed_dir.exists():
         shutil.rmtree(managed_dir, ignore_errors=True)
 
+    # Clear active runtime state so initialization status reflects the reset.
+    active_connector = app_state.get("connector")
+    if active_connector is not None:
+        try:
+            await active_connector.close()
+        except Exception:
+            pass
+    app_state["connector"] = None
+    app_state["pipeline"] = None
+
     clear_config()
 
     apply_config_defaults()
