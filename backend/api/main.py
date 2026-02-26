@@ -106,8 +106,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 database_url=db_url_str,
                 pool_size=config.database.pool_size,
             )
-            await connector.connect()
-            app_state["connector"] = connector
+            try:
+                await connector.connect()
+                app_state["connector"] = connector
+            except ConnectorConnectionError as e:
+                logger.warning(
+                    "Target database connection unavailable at startup: %s. "
+                    "API continues in setup mode.",
+                    e,
+                )
+                app_state["connector"] = None
         else:
             logger.warning("DATABASE_URL not set; target database connector not initialized.")
             app_state["connector"] = None
