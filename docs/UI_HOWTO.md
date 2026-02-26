@@ -203,6 +203,24 @@ Storage and usage:
 - If no system database is configured, feedback is captured in API logs as structured payloads.
 - Teams can use this data to prioritize DataPoint fixes, tune prompts, and validate retrieval quality.
 
+### 15.1 Train DataChat from a Bad Answer
+
+When a response includes SQL, use the in-message **Train DataChat** action to create a managed Query DataPoint from that result:
+
+1. Click **Train DataChat** on the assistant response.
+2. Confirm/edit question context and SQL template.
+3. Add optional notes and related tables.
+4. Click **Save and Retry** to persist the datapoint and re-run the question.
+
+Current behavior:
+
+- The training flow creates managed **Query** DataPoints.
+- The datapoint is saved through the managed DataPoint API and then reused by retrieval/runtime on the next run.
+
+Planned extension:
+
+- Add training targets for **Business**, **Schema**, and **Process** DataPoint types using the same guided loop.
+
 ---
 
 ## 16. Tool Approval Modal

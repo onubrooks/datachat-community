@@ -34,3 +34,10 @@ Ship `datachat-community` with a stable, usable foundation for data teams evalua
 - Community repo receives promoted, public-safe commits only
 - Any feature not explicitly in this scope is treated as out-of-scope for `v0.1.0`
 
+## Post-v0.1 Candidates (Planned)
+
+- Extend the **Train DataChat** correction loop from Query datapoints to guided creation of:
+  - Business datapoints
+  - Schema datapoints
+  - Process datapoints
+- Keep managed lifecycle + approval semantics consistent across all datapoint types.
