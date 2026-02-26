@@ -163,10 +163,23 @@ type MetadataExplorerItem = {
   reviewNote?: string | null;
   sourceTier?: string | null;
   sourcePath?: string | null;
+  lifecycleVersion?: string | null;
+  lifecycleChangedAt?: string | null;
+  lifecycleChangedBy?: string | null;
   payload?: Record<string, unknown> | null;
 };
 
 type TrainMode = "create" | "update";
+
+type TrainManagedQueryOption = {
+  datapointId: string;
+  name: string;
+  connectionId: string | null;
+  scope: string | null;
+  lifecycleVersion: string | null;
+  lifecycleChangedAt: string | null;
+  lifecycleChangedBy: string | null;
+};
 
 const normalizeMetadataItem = (
   item: Record<string, unknown>,
@@ -208,6 +221,12 @@ const normalizeMetadataItem = (
       typeof metadata.source_tier === "string" ? metadata.source_tier : null,
     sourcePath:
       typeof metadata.source_path === "string" ? metadata.source_path : null,
+    lifecycleVersion:
+      typeof metadata.lifecycle_version === "string" ? metadata.lifecycle_version : null,
+    lifecycleChangedAt:
+      typeof metadata.lifecycle_changed_at === "string" ? metadata.lifecycle_changed_at : null,
+    lifecycleChangedBy:
+      typeof metadata.lifecycle_changed_by === "string" ? metadata.lifecycle_changed_by : null,
     payload: datapoint,
   };
 };
@@ -274,6 +293,17 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
+
+const formatTrainHistoryTimestamp = (value: string | null): string => {
+  if (!value) {
+    return "Unknown";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+};
 
 export function ChatInterface() {
   const router = useRouter();
@@ -354,6 +384,7 @@ export function ChatInterface() {
   const [trainModalOpen, setTrainModalOpen] = useState(false);
   const [trainMode, setTrainMode] = useState<TrainMode>("create");
   const [trainTargetDatapointId, setTrainTargetDatapointId] = useState("");
+  const [trainHistorySearch, setTrainHistorySearch] = useState("");
   const [trainQuestion, setTrainQuestion] = useState("");
   const [trainSql, setTrainSql] = useState("");
   const [trainName, setTrainName] = useState("");
@@ -1008,6 +1039,9 @@ export function ChatInterface() {
         relatedTables: [],
         sourceTier: item.source_tier || null,
         sourcePath: item.source_path || null,
+        lifecycleVersion: item.lifecycle_version || null,
+        lifecycleChangedAt: item.lifecycle_changed_at || null,
+        lifecycleChangedBy: item.lifecycle_changed_by || null,
         payload: null,
       }))
       .filter((item) => {
@@ -1042,7 +1076,7 @@ export function ChatInterface() {
     return filterMetadataItems(items, metadataSearch);
   }, [managedMetadataInContextItems, metadataSearch, includeExampleMetadata]);
 
-  const trainManagedQueryOptions = useMemo(() => {
+  const trainManagedQueryOptions = useMemo<TrainManagedQueryOption[]>(() => {
     return managedMetadataInContextItems
       .filter((item) => {
         const tier = item.sourceTier?.toLowerCase();
@@ -1053,9 +1087,32 @@ export function ChatInterface() {
         name: item.name,
         connectionId: item.connectionId || null,
         scope: item.scope || null,
+        lifecycleVersion: item.lifecycleVersion || null,
+        lifecycleChangedAt: item.lifecycleChangedAt || null,
+        lifecycleChangedBy: item.lifecycleChangedBy || null,
       }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        const aTime = a.lifecycleChangedAt ? Date.parse(a.lifecycleChangedAt) : 0;
+        const bTime = b.lifecycleChangedAt ? Date.parse(b.lifecycleChangedAt) : 0;
+        if (aTime !== bTime) {
+          return bTime - aTime;
+        }
+        return a.name.localeCompare(b.name);
+      });
   }, [managedMetadataInContextItems]);
+
+  const filteredTrainManagedQueryOptions = useMemo(() => {
+    const query = trainHistorySearch.trim().toLowerCase();
+    if (!query) {
+      return trainManagedQueryOptions;
+    }
+    return trainManagedQueryOptions.filter((item) => {
+      const haystack = `${item.name} ${item.datapointId} ${item.connectionId || ""} ${
+        item.scope || ""
+      } ${item.lifecycleChangedBy || ""}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [trainHistorySearch, trainManagedQueryOptions]);
 
   const selectedTrainManagedOption = useMemo(
     () =>
@@ -1466,6 +1523,7 @@ export function ChatInterface() {
     const related = extractRelatedTablesFromSql(payload.sql || "");
     setTrainMode("create");
     setTrainTargetDatapointId("");
+    setTrainHistorySearch("");
     setTrainQuestion(nextQuestion);
     setTrainSql((payload.sql || "").trim());
     setTrainName(
@@ -2474,6 +2532,7 @@ export function ChatInterface() {
                     type="button"
                     onClick={() => {
                       setTrainMode("update");
+                      setTrainHistorySearch("");
                       setTrainError(null);
                       if (!trainTargetDatapointId && trainManagedQueryOptions.length > 0) {
                         setTrainTargetDatapointId(trainManagedQueryOptions[0].datapointId);
@@ -2491,27 +2550,53 @@ export function ChatInterface() {
                 </div>
 
                 {trainMode === "update" && (
-                  <label className="mt-3 block text-xs font-medium text-foreground">
-                    Existing trained datapoint
-                    <select
-                      className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
-                      value={trainTargetDatapointId}
-                      onChange={(event) => {
-                        setTrainTargetDatapointId(event.target.value);
-                        setTrainError(null);
-                      }}
+                  <div className="mt-3 space-y-2">
+                    <div className="text-xs font-medium text-foreground">Training history</div>
+                    <Input
+                      value={trainHistorySearch}
+                      onChange={(event) => setTrainHistorySearch(event.target.value)}
+                      placeholder="Search by name, id, scope, or updater"
+                      className="h-8 text-xs"
                       disabled={trainSubmitting || trainLoadingExisting}
-                    >
-                      {!trainManagedQueryOptions.length && (
-                        <option value="">No user-trained query datapoints found</option>
+                    />
+                    <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border border-border/70 bg-muted/20 p-2">
+                      {!filteredTrainManagedQueryOptions.length ? (
+                        <div className="px-2 py-1 text-xs text-muted-foreground">
+                          No matching user-trained query datapoints.
+                        </div>
+                      ) : (
+                        filteredTrainManagedQueryOptions.map((item) => (
+                          <button
+                            key={item.datapointId}
+                            type="button"
+                            onClick={() => {
+                              setTrainTargetDatapointId(item.datapointId);
+                              setTrainError(null);
+                            }}
+                            disabled={trainSubmitting || trainLoadingExisting}
+                            className={`w-full rounded-md border px-2 py-2 text-left transition ${
+                              item.datapointId === trainTargetDatapointId
+                                ? "border-primary/50 bg-primary/10"
+                                : "border-border/60 bg-background hover:bg-muted/60"
+                            }`}
+                          >
+                            <div className="truncate text-xs font-medium text-foreground">
+                              {item.name}
+                            </div>
+                            <div className="truncate text-[11px] text-muted-foreground">
+                              {item.datapointId}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                              <span>Updated: {formatTrainHistoryTimestamp(item.lifecycleChangedAt)}</span>
+                              {item.lifecycleVersion ? <span>v{item.lifecycleVersion}</span> : null}
+                              {item.scope ? <span>scope:{item.scope}</span> : null}
+                              {item.lifecycleChangedBy ? <span>by:{item.lifecycleChangedBy}</span> : null}
+                            </div>
+                          </button>
+                        ))
                       )}
-                      {trainManagedQueryOptions.map((item) => (
-                        <option key={item.datapointId} value={item.datapointId}>
-                          {item.name} ({item.datapointId})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    </div>
+                  </div>
                 )}
 
                 <div className="mt-4 max-h-[62vh] space-y-3 overflow-y-auto pr-1">

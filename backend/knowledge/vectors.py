@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -106,8 +107,8 @@ class VectorStore:
             VectorStoreError: If initialization fails
         """
         try:
-            # Ensure persist directory exists
-            self.persist_directory.mkdir(parents=True, exist_ok=True)
+            # Ensure persist directory exists and is writable, otherwise switch to fallback.
+            await asyncio.to_thread(self._ensure_writable_persist_directory)
 
             # Initialize Chroma client (sync, will wrap in to_thread)
             await asyncio.to_thread(self._init_client)
@@ -174,39 +175,94 @@ class VectorStore:
             logger.warning("No datapoints to add")
             return 0
 
+        unique_datapoints = list({dp.datapoint_id: dp for dp in datapoints}.values())
+
         try:
-            total_added = 0
-            unique_datapoints = list({dp.datapoint_id: dp for dp in datapoints}.values())
-
-            # Process in batches
-            for i in range(0, len(unique_datapoints), batch_size):
-                batch = unique_datapoints[i : i + batch_size]
-
-                # Prepare batch data
-                ids = [dp.datapoint_id for dp in batch]
-                documents = [
-                    self._truncate_document(self._create_document(dp), dp.datapoint_id)
-                    for dp in batch
-                ]
-                metadatas = [self._create_metadata(dp) for dp in batch]
-
-                # Add to Chroma (async wrapper)
-                await asyncio.to_thread(
-                    self.collection.upsert,
-                    ids=ids,
-                    documents=documents,
-                    metadatas=metadatas,
-                )
-
-                total_added += len(batch)
-                logger.debug(f"Upserted batch of {len(batch)} datapoints ({total_added} total)")
-
-            logger.info(f"Successfully upserted {total_added} datapoints to vector store")
-            return total_added
-
+            return await self._upsert_datapoint_batches(unique_datapoints, batch_size)
         except Exception as e:
+            if self._is_readonly_error(e):
+                logger.warning(
+                    "Vector store is readonly at '%s'; attempting writable recovery.",
+                    self.persist_directory,
+                )
+                recovered = await self._recover_from_readonly_error()
+                if recovered:
+                    try:
+                        return await self._upsert_datapoint_batches(unique_datapoints, batch_size)
+                    except Exception as retry_error:
+                        logger.error(
+                            "Vector add retry failed after readonly recovery: %s", retry_error
+                        )
+                        raise VectorStoreError(
+                            f"Failed to add datapoints after readonly recovery: {retry_error}"
+                        ) from retry_error
             logger.error(f"Failed to add datapoints: {e}")
             raise VectorStoreError(f"Failed to add datapoints: {e}") from e
+
+    async def _upsert_datapoint_batches(
+        self, datapoints: list[DataPoint], batch_size: int
+    ) -> int:
+        total_added = 0
+
+        for i in range(0, len(datapoints), batch_size):
+            batch = datapoints[i : i + batch_size]
+
+            ids = [dp.datapoint_id for dp in batch]
+            documents = [
+                self._truncate_document(self._create_document(dp), dp.datapoint_id)
+                for dp in batch
+            ]
+            metadatas = [self._create_metadata(dp) for dp in batch]
+
+            await asyncio.to_thread(
+                self.collection.upsert,
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+            )
+
+            total_added += len(batch)
+            logger.debug("Upserted batch of %s datapoints (%s total)", len(batch), total_added)
+
+        logger.info("Successfully upserted %s datapoints to vector store", total_added)
+        return total_added
+
+    def _probe_directory_writable(self, directory: Path) -> bool:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            probe = directory / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
+
+    def _ensure_writable_persist_directory(self) -> None:
+        if self._probe_directory_writable(self.persist_directory):
+            return
+
+        logger.warning(
+            "Configured vector persist directory is not writable: %s", self.persist_directory
+        )
+        fallback_candidates = [
+            Path.home() / ".datachat" / "chroma_data",
+            Path(tempfile.gettempdir()) / "datachat_chroma",
+        ]
+
+        current_resolved = self.persist_directory.resolve(strict=False)
+        for candidate in fallback_candidates:
+            if candidate.resolve(strict=False) == current_resolved:
+                continue
+            if self._probe_directory_writable(candidate):
+                logger.warning(
+                    "Switching vector persist directory to writable fallback: %s", candidate
+                )
+                self.persist_directory = candidate
+                return
+
+        raise VectorStoreError(
+            f"Failed to find writable vector persist directory. Current path: {self.persist_directory}"
+        )
 
     def _truncate_document(self, text: str, datapoint_id: str) -> str:
         normalized = re.sub(r"\s+", " ", text).strip()
@@ -455,6 +511,24 @@ class VectorStore:
             "segment not found",
         )
         return any(marker in message for marker in recoverable_markers)
+
+    def _is_readonly_error(self, error: Exception) -> bool:
+        message = str(error).lower()
+        readonly_markers = (
+            "readonly",
+            "read-only",
+            "attempt to write a readonly database",
+            "permission denied",
+        )
+        return any(marker in message for marker in readonly_markers)
+
+    async def _recover_from_readonly_error(self) -> bool:
+        try:
+            await asyncio.to_thread(self._ensure_writable_persist_directory)
+            return await self._recover_from_storage_error()
+        except Exception as recovery_error:
+            logger.warning("Readonly recovery failed: %s", recovery_error)
+            return False
 
     async def _recover_from_storage_error(self) -> bool:
         """

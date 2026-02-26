@@ -403,6 +403,11 @@ export interface DataPointSummary {
   scope?: string | null;
   source_tier?: string | null;
   source_path?: string | null;
+  lifecycle_version?: string | null;
+  lifecycle_reviewer?: string | null;
+  lifecycle_changed_by?: string | null;
+  lifecycle_changed_reason?: string | null;
+  lifecycle_changed_at?: string | null;
 }
 
 export interface RuntimeSettingsResponse {

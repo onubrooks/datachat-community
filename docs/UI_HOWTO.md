@@ -209,6 +209,7 @@ When a response includes SQL, use the in-message **Train DataChat** action to cr
 
 1. Click **Train DataChat** on the assistant response.
 2. Choose **Create New** or **Update Existing**.
+   In update mode, use the training history list (with search and last-updated labels) to pick the datapoint to revise.
 3. Confirm/edit question context and SQL template.
 4. Add optional notes and related tables.
 5. Click **Save, Sync, and Retry** (or **Update, Sync, and Retry**).
