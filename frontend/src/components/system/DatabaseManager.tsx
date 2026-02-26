@@ -190,6 +190,7 @@ export function DatabaseManager() {
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [depth, setDepth] = useState("metrics_basic");
   const [activeGenerationProfileId, setActiveGenerationProfileId] = useState<string | null>(null);
+  const [activeGenerationJobId, setActiveGenerationJobId] = useState<string | null>(null);
   const [generationFallbackJob, setGenerationFallbackJob] = useState<GenerationJob | null>(null);
   const addConnectionRef = useRef<HTMLDivElement | null>(null);
   const previousGenerationStateRef = useRef<{ jobId: string; status: string } | null>(null);
@@ -374,13 +375,18 @@ export function DatabaseManager() {
 
   const generationProfileId = activeGenerationProfileId || job?.profile_id || null;
   const generationJobQuery = useQuery({
-    queryKey: ["generation-latest", generationProfileId],
-    queryFn: () => api.getLatestGenerationJob(generationProfileId as string),
-    enabled: Boolean(generationProfileId),
+    queryKey: ["generation-job", activeGenerationJobId, generationProfileId],
+    queryFn: () => {
+      if (activeGenerationJobId) {
+        return api.getGenerationJob(activeGenerationJobId);
+      }
+      return api.getLatestGenerationJob(generationProfileId as string);
+    },
+    enabled: Boolean(activeGenerationJobId || generationProfileId),
     refetchInterval: (query) => {
       const generation = query.state.data as GenerationJob | null | undefined;
       if (!generation) {
-        return generationProfileId ? 3000 : false;
+        return activeGenerationJobId || generationProfileId ? 3000 : false;
       }
       if (!isJobInProgress(generation.status)) {
         return false;
@@ -408,6 +414,7 @@ export function DatabaseManager() {
       queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
       queryClient.invalidateQueries({ queryKey: ["profile-tables"] }),
       queryClient.invalidateQueries({ queryKey: ["generation-latest"] }),
+      queryClient.invalidateQueries({ queryKey: ["generation-job"] }),
     ]);
   }, [queryClient]);
 
@@ -438,12 +445,16 @@ export function DatabaseManager() {
     setGenerationFallbackJob(generationJob);
     if (isJobInProgress(generationJob.status)) {
       setActiveGenerationProfileId(generationJob.profile_id);
+      setActiveGenerationJobId(generationJob.job_id);
       return;
+    }
+    if (activeGenerationJobId && generationJob.job_id === activeGenerationJobId) {
+      setActiveGenerationJobId(null);
     }
     if (activeGenerationProfileId && generationJob.profile_id === activeGenerationProfileId) {
       setActiveGenerationProfileId(null);
     }
-  }, [generationJob, activeGenerationProfileId]);
+  }, [generationJob, activeGenerationJobId, activeGenerationProfileId]);
 
   const handleToolProfile = async () => {
     setToolApprovalOpen(true);
@@ -518,6 +529,7 @@ export function DatabaseManager() {
 
   useEffect(() => {
     setActiveGenerationProfileId(null);
+    setActiveGenerationJobId(null);
     setGenerationFallbackJob(null);
   }, [selectedManagedConnectionId]);
 
@@ -722,7 +734,9 @@ export function DatabaseManager() {
         replace_existing: true,
       });
       queryClient.setQueryData(["generation-latest", profileId], generation);
+      queryClient.setQueryData(["generation-job", generation.job_id, profileId], generation);
       setActiveGenerationProfileId(profileId);
+      setActiveGenerationJobId(generation.job_id);
       setGenerationFallbackJob(generation);
       await invalidateManagerQueries();
       return true;
@@ -1044,8 +1058,17 @@ export function DatabaseManager() {
           ["profiling-job-latest", quickstartConnection.connection_id],
           latestJob
         );
-        profileId = latestJob?.profile_id || null;
+        if (!latestJob || latestJob.status !== "completed" || !latestJob.profile_id) {
+          setError("Profiling must complete successfully before generating metadata.");
+          await emitEntryEvent("generate_datapoints", "failed", {
+            reason: "profiling_not_completed",
+            connection_id: quickstartConnection.connection_id,
+          });
+          return false;
+        }
+        profileId = latestJob.profile_id;
       } catch {
+        setError("Unable to load latest profiling state for metadata generation.");
         profileId = null;
       }
     }
