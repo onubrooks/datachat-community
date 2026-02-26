@@ -409,45 +409,6 @@ export function SchemaExplorerSidebar({
                       managedMetadataItems,
                       "No active managed DataPoints matched your filters."
                     )}
-                    <section className="rounded border border-border bg-background p-2">
-                      <div className="mb-2 text-[11px] font-semibold text-foreground">
-                        Metadata Detail
-                      </div>
-                      {!selectedMetadataKey && (
-                        <p className="text-[11px] text-muted-foreground">
-                          Select a metadata item above, then click <span className="font-medium">Show details</span>.
-                        </p>
-                      )}
-                      {selectedMetadataKey && metadataDetailLoading && (
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          Loading metadata detail...
-                        </div>
-                      )}
-                      {selectedMetadataKey && !metadataDetailLoading && metadataDetailError && (
-                        <div className="rounded border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
-                          {metadataDetailError}
-                        </div>
-                      )}
-                      {selectedMetadataKey &&
-                        !metadataDetailLoading &&
-                        !metadataDetailError &&
-                        metadataDetail && (
-                          <div className="space-y-2 text-[11px]">
-                            <p className="text-muted-foreground">
-                              Detail is available. Open the centered modal for full context.
-                            </p>
-                            <Button
-                              type="button"
-                              size="sm"
-                              className="h-7 px-2 text-[10px]"
-                              onClick={() => setMetadataDetailOpen(true)}
-                            >
-                              Open Detail Modal
-                            </Button>
-                          </div>
-                        )}
-                    </section>
                   </>
                 )}
               </div>
