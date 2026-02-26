@@ -1466,6 +1466,7 @@ export function ChatInterface() {
     const datapointId = `query_user_trained_${slugifyDatapointToken(question)}_${String(
       Date.now()
     ).slice(-6)}`;
+    const trainingNote = trainNotes.trim();
     const payload: Record<string, unknown> = {
       datapoint_id: datapointId,
       type: "Query",
@@ -1477,11 +1478,16 @@ export function ChatInterface() {
         source_tier: "user",
         scope: connectionId ? "database" : "global",
         connection_id: connectionId,
+        grain: "product_store_latest_snapshot",
+        exclusions:
+          "Anchored to latest available snapshot week; does not include forward demand forecasting or supplier lead-time risk.",
+        confidence_notes:
+          "User-trained datapoint from chat correction loop. Validate against business policy before external reporting.",
         trained_from_question: question,
-        training_note: trainNotes.trim() || null,
+        training_note: trainingNote || undefined,
       },
       description:
-        trainNotes.trim() ||
+        trainingNote ||
         `User-trained query datapoint for: ${question}. Added from chat feedback loop.`,
       sql_template: sql,
       parameters: {},

@@ -17,6 +17,7 @@ Use this before public announcements.
 - [ ] First successful question asked in <= 5 minutes.
 - [ ] UI onboarding wizard flow works: connect DB -> generate metadata -> ask first question.
 - [ ] CLI onboarding wizard flow works: `datachat onboarding wizard`.
+- [ ] Train loop demo works: bad/empty answer -> **Train DataChat** -> save datapoint -> retry with improved result.
 
 ## Reliability Checks
 
