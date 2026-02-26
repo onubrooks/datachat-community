@@ -2731,7 +2731,7 @@ def setup(
                     initialize_tools(refreshed_settings.tools.policy_path)
                     executor = ToolExecutor()
                     ctx = ToolContext(user_id="cli", correlation_id="setup", approved=True)
-                    args = {"depth": "metrics_basic", "batch_size": 10}
+                    args = {"depth": "metrics_full", "batch_size": 10}
                     if resolved_max_tables:
                         args["max_tables"] = resolved_max_tables
                     result = await executor.execute(
@@ -3269,7 +3269,7 @@ def onboarding_wizard(
 @click.option(
     "--depth",
     type=click.Choice(["schema_only", "metrics_basic", "metrics_full"]),
-    default="metrics_basic",
+    default="metrics_full",
     show_default=True,
     help="Generation depth for --generate-after-profile.",
 )
@@ -4093,7 +4093,7 @@ def approve_all_pending(profile_id: str | None, latest: bool):
 @click.option(
     "--depth",
     type=click.Choice(["schema_only", "metrics_basic", "metrics_full"]),
-    default="metrics_basic",
+    default="metrics_full",
     show_default=True,
 )
 @click.option("--tables", multiple=True, help="Optional table names to include.")

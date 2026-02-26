@@ -188,7 +188,7 @@ export function DatabaseManager() {
   const [editingDatabaseType, setEditingDatabaseType] = useState("postgresql");
   const [editingDescription, setEditingDescription] = useState("");
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
-  const [depth, setDepth] = useState("metrics_basic");
+  const [depth, setDepth] = useState("metrics_full");
   const [activeGenerationProfileId, setActiveGenerationProfileId] = useState<string | null>(null);
   const [activeGenerationJobId, setActiveGenerationJobId] = useState<string | null>(null);
   const generationFallbackJobRef = useRef<GenerationJob | null>(null);
