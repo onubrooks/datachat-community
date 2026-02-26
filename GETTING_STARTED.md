@@ -21,7 +21,8 @@ Choose one database setup path:
 - Path A: set `DATABASE_URL` directly in `.env`.
 - Path B: use onboarding wizard (UI or CLI) to add a connection.
 
-Set one LLM provider key in `.env`, then run:
+Set one LLM provider key in `.env`, or add it later in **Settings**.
+Then run:
 
 ```bash
 docker-compose up
@@ -47,10 +48,12 @@ If this succeeds, continue with the full guide below.
 
 Use this when you want immediate querying with only DB credentials.
 
-Required:
+Required before asking questions:
 
-- `DATABASE_URL`
+- target database URL
 - one LLM key (for example `LLM_OPENAI_API_KEY`)
+
+You can provide both via `.env` or in the **Settings** page.
 
 ### Mode B: Registry + profiling (recommended for teams)
 
@@ -93,7 +96,7 @@ cd ..
 cp .env.example .env
 ```
 
-Set one LLM key.
+Set one LLM key (or add it in Settings after startup).
 
 For Mode A, set `DATABASE_URL` directly:
 
@@ -101,6 +104,12 @@ For Mode A, set `DATABASE_URL` directly:
 DATABASE_URL=postgresql://user:password@host:5432/your_database
 LLM_OPENAI_API_KEY=sk-...
 ```
+
+Settings-first alternative:
+- start backend/frontend
+- open `/settings`
+- set provider/key and target database URL
+- save runtime settings, then ask your first question
 
 For Mode B, set registry env and add DB through wizard:
 

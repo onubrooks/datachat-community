@@ -2491,9 +2491,10 @@ def dev(
         )
         if missing_key_vars:
             missing_list = ", ".join(missing_key_vars)
-            raise click.ClickException(
-                "Missing required LLM API key(s) for backend startup: "
-                f"{missing_list}. Set one in .env before running `datachat dev`."
+            console.print(
+                "[yellow]Warning:[/yellow] Missing LLM API key(s): "
+                f"{missing_list}. Backend will still start, but queries may fail until "
+                "keys are configured in Settings or env."
             )
 
     if not no_backend:

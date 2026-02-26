@@ -313,6 +313,8 @@ Open **Settings** from the header to configure:
 - Show/hide agent timing breakdown
 - Simple SQL synthesis toggle
 - Theme mode (`Light`, `Dark`, `System`)
+- Runtime database settings (target/system DB URLs, credentials key)
+- Runtime LLM settings (default provider, model fields, API keys)
 
 ---
 
