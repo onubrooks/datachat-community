@@ -209,67 +209,31 @@ describe("Message", () => {
     expect(screen.getByText("LLM calls: 1")).toBeInTheDocument();
   });
 
-  it("does not duplicate finance brief summary when it matches the main answer", () => {
-    const duplicatedText = "Net flow decreased week over week across segments.";
-
+  it("ignores workflow artifacts in community mode", () => {
     render(
       <Message
         message={{
-          id: "msg-finance-duplicate",
+          id: "msg-workflow-hidden",
           role: "assistant",
-          content: duplicatedText,
-          workflow_artifacts: {
-            package_version: "v1",
-            domain: "finance",
-            summary: duplicatedText,
-            metrics: [],
-            drivers: [],
-            caveats: ["Review source assumptions before sharing externally."],
-            sources: [],
-            follow_ups: ["Compare this result against the previous equivalent period."],
-          },
-          timestamp: new Date(),
-        }}
-      />
-    );
-
-    expect(screen.getAllByText(duplicatedText)).toHaveLength(1);
-    expect(screen.getByText("Finance Brief")).toBeInTheDocument();
-    expect(screen.getByText("Caveats")).toBeInTheDocument();
-  });
-
-  it("renders finance brief duplicate metrics without React key warnings", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    render(
-      <Message
-        message={{
-          id: "msg-finance-keys",
-          role: "assistant",
-          content: "Finance summary",
+          content: "Base answer",
           workflow_artifacts: {
             package_version: "v1",
             domain: "finance",
             summary: "Finance summary",
-            metrics: [
-              { label: "Loan Type", value: "auto" },
-              { label: "Loan Type", value: "auto" },
-            ],
+            metrics: [{ label: "Loan Type", value: "auto" }],
             drivers: [],
-            caveats: [],
+            caveats: ["Example caveat"],
             sources: [],
-            follow_ups: [],
+            follow_ups: ["Example follow up"],
           },
           timestamp: new Date(),
         }}
       />
     );
 
-    const duplicateKeyWarnings = errorSpy.mock.calls.filter((call) =>
-      String(call[0]).includes("Encountered two children with the same key")
-    );
-    expect(duplicateKeyWarnings).toHaveLength(0);
-    errorSpy.mockRestore();
+    expect(screen.getByText("Base answer")).toBeInTheDocument();
+    expect(screen.queryByText("Finance Brief")).not.toBeInTheDocument();
+    expect(screen.queryByText("Key Metrics")).not.toBeInTheDocument();
   });
 
   it("shows agent timing breakdown in a timing tab sorted longest to shortest", () => {

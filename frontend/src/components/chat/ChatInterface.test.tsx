@@ -161,23 +161,6 @@ describe("ChatInterface target database", () => {
     expect(request.target_database).toBe("db_pg");
   });
 
-  it("sends selected workflow mode in chat requests", async () => {
-    renderWithProviders(<ChatInterface />);
-    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(screen.getByLabelText("Workflow mode"), {
-      target: { value: "finance_variance_v1" },
-    });
-
-    const input = screen.getByPlaceholderText("Ask a question about your data...");
-    fireEvent.change(input, { target: { value: "show liquidity risk signals" } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
-
-    await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
-    const request = mockStreamChat.mock.calls[0][0] as Record<string, unknown>;
-    expect(request.workflow_mode).toBe("finance_variance_v1");
-  });
-
   it("restores input focus after response completes", async () => {
     let handlers:
       | {
