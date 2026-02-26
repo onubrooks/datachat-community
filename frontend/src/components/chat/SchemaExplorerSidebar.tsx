@@ -65,6 +65,7 @@ interface SchemaExplorerSidebarProps {
   onSelectMetadataItem: (item: MetadataExplorerItem) => void;
   onSelectTable: (fullName: string) => void;
   onUseTable: (fullName: string) => void;
+  onAddDatapoint: () => void;
 }
 
 export function SchemaExplorerSidebar({
@@ -95,6 +96,7 @@ export function SchemaExplorerSidebar({
   onSelectMetadataItem,
   onSelectTable,
   onUseTable,
+  onAddDatapoint,
 }: SchemaExplorerSidebarProps) {
   const [metadataDetailOpen, setMetadataDetailOpen] = useState(false);
 
@@ -366,6 +368,17 @@ export function SchemaExplorerSidebar({
                   className="h-8 text-xs"
                   aria-label="Search generated and managed metadata"
                 />
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={onAddDatapoint}
+                  >
+                    Add Datapoint
+                  </Button>
+                </div>
                 <label className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
                   <input
                     type="checkbox"

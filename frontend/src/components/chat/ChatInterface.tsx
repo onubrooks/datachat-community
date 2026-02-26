@@ -382,6 +382,7 @@ export function ChatInterface() {
   const [composerMode, setComposerMode] = useState<"nl" | "sql">("nl");
   const [sqlDraft, setSqlDraft] = useState("");
   const [trainModalOpen, setTrainModalOpen] = useState(false);
+  const [trainCreateOnly, setTrainCreateOnly] = useState(false);
   const [trainMode, setTrainMode] = useState<TrainMode>("create");
   const [trainTargetDatapointId, setTrainTargetDatapointId] = useState("");
   const [trainHistorySearch, setTrainHistorySearch] = useState("");
@@ -1521,6 +1522,7 @@ export function ChatInterface() {
     const fallbackQuestion = findSourceQuestionForMessage(payload.message_id);
     const nextQuestion = (payload.question || fallbackQuestion || "").trim();
     const related = extractRelatedTablesFromSql(payload.sql || "");
+    setTrainCreateOnly(false);
     setTrainMode("create");
     setTrainTargetDatapointId("");
     setTrainHistorySearch("");
@@ -1539,6 +1541,46 @@ export function ChatInterface() {
     setTrainNotice(null);
     setTrainModalOpen(true);
   };
+
+  const handleOpenCreateDatapointModal = useCallback(() => {
+    setTrainCreateOnly(true);
+    setTrainMode("create");
+    setTrainTargetDatapointId("");
+    setTrainHistorySearch("");
+    setTrainQuestion("");
+    setTrainSql("");
+    setTrainName("User-trained query datapoint");
+    setTrainNotes("");
+    setTrainRelatedTables(selectedSchemaTable || "");
+    setTrainLoadingExisting(false);
+    setTrainSyncing(false);
+    setTrainError(null);
+    setTrainNotice(null);
+    setTrainModalOpen(true);
+  }, [selectedSchemaTable]);
+
+  const refreshMetadataExplorer = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["metadata-managed"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["metadata-approved", metadataConnectionId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["metadata-pending", metadataConnectionId],
+      }),
+    ]);
+    await Promise.all([
+      managedMetadataQuery.refetch(),
+      approvedMetadataQuery.refetch(),
+      pendingMetadataQuery.refetch(),
+    ]);
+  }, [
+    approvedMetadataQuery,
+    managedMetadataQuery,
+    metadataConnectionId,
+    pendingMetadataQuery,
+    queryClient,
+  ]);
 
   useEffect(() => {
     if (!trainModalOpen || trainMode !== "update") {
@@ -1710,11 +1752,7 @@ export function ChatInterface() {
         await apiClient.createDatapoint(payload);
       }
 
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["metadata-managed"] }),
-        queryClient.invalidateQueries({ queryKey: ["metadata-approved"] }),
-        queryClient.invalidateQueries({ queryKey: ["metadata-pending"] }),
-      ]);
+      await refreshMetadataExplorer();
 
       let syncWarning: string | null = null;
       try {
@@ -1726,6 +1764,7 @@ export function ChatInterface() {
           conflict_mode: "prefer_latest",
         });
         await waitForSyncCompletion(syncJob.job_id);
+        await refreshMetadataExplorer();
       } catch (syncErr) {
         syncWarning =
           syncErr instanceof Error
@@ -1741,6 +1780,7 @@ export function ChatInterface() {
           : `${isUpdateMode ? "Datapoint updated" : "Datapoint created"} and indexed. Re-running your question...`
       );
       setTrainModalOpen(false);
+      setTrainCreateOnly(false);
       setTrainMode("create");
       setTrainTargetDatapointId("");
       setComposerMode("nl");
@@ -1980,6 +2020,7 @@ export function ChatInterface() {
           event.preventDefault();
           if (!trainSubmitting) {
             setTrainModalOpen(false);
+            setTrainCreateOnly(false);
             setTrainError(null);
           }
           restoreInputFocus();
@@ -2483,6 +2524,7 @@ export function ChatInterface() {
             onSelectMetadataItem={handleSelectMetadataItem}
             onSelectTable={handleSchemaSelectTable}
             onUseTable={handleSchemaUseTable}
+            onAddDatapoint={handleOpenCreateDatapointModal}
           />
         </div>
       </div>
@@ -2497,6 +2539,7 @@ export function ChatInterface() {
             onClick={() => {
               if (!trainSubmitting) {
                 setTrainModalOpen(false);
+                setTrainCreateOnly(false);
                 setTrainError(null);
               }
             }}
@@ -2508,7 +2551,9 @@ export function ChatInterface() {
               >
                 <h3 className="text-base font-semibold">Train DataChat</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Create or update a managed query datapoint, sync it, then retry the question.
+                  {trainCreateOnly
+                    ? "Create a managed query datapoint, sync it, then retry the question."
+                    : "Create or update a managed query datapoint, sync it, then retry the question."}
                 </p>
 
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -2524,29 +2569,31 @@ export function ChatInterface() {
                         ? "border-primary/50 bg-primary/10 text-primary"
                         : "border-border text-muted-foreground hover:bg-muted"
                     }`}
-                    disabled={trainSubmitting}
+                    disabled={trainSubmitting || trainCreateOnly}
                   >
                     Create New
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTrainMode("update");
-                      setTrainHistorySearch("");
-                      setTrainError(null);
-                      if (!trainTargetDatapointId && trainManagedQueryOptions.length > 0) {
-                        setTrainTargetDatapointId(trainManagedQueryOptions[0].datapointId);
-                      }
-                    }}
-                    className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
-                      trainMode === "update"
-                        ? "border-primary/50 bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:bg-muted"
-                    }`}
-                    disabled={trainSubmitting}
-                  >
-                    Update Existing
-                  </button>
+                  {!trainCreateOnly && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTrainMode("update");
+                        setTrainHistorySearch("");
+                        setTrainError(null);
+                        if (!trainTargetDatapointId && trainManagedQueryOptions.length > 0) {
+                          setTrainTargetDatapointId(trainManagedQueryOptions[0].datapointId);
+                        }
+                      }}
+                      className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
+                        trainMode === "update"
+                          ? "border-primary/50 bg-primary/10 text-primary"
+                          : "border-border text-muted-foreground hover:bg-muted"
+                      }`}
+                      disabled={trainSubmitting}
+                    >
+                      Update Existing
+                    </button>
+                  )}
                 </div>
 
                 {trainMode === "update" && (
@@ -2675,6 +2722,7 @@ export function ChatInterface() {
                         return;
                       }
                       setTrainModalOpen(false);
+                      setTrainCreateOnly(false);
                       setTrainError(null);
                     }}
                     disabled={trainSubmitting}

@@ -132,6 +132,7 @@ On the right sidebar:
 4. Click **Use In Query** from schema rows:
    - In Ask mode: inserts a natural-language prompt.
    - In SQL mode: inserts a SQL starter query.
+5. Click **Add Datapoint** in Metadata to open create-only training flow directly from the sidebar.
 
 ---
 
