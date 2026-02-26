@@ -335,8 +335,7 @@ export function ChatInterface() {
     },
   });
 
-  const hasConfiguredConnection = connections.length > 0;
-  const canRunQueries = isInitialized || hasConfiguredConnection;
+  const canRunQueries = isInitialized;
 
   const schemaQuery = useQuery({
     queryKey: ["database-schema", targetDatabaseId],
