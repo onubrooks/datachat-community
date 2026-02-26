@@ -52,6 +52,7 @@ interface SchemaExplorerSidebarProps {
   metadataDetailLoading: boolean;
   metadataDetailError: string | null;
   includeExampleMetadata: boolean;
+  metadataContextNote?: string | null;
   selectedSchemaTable: string | null;
   onToggle: () => void;
   onExplorerModeChange: (mode: "schema" | "metadata") => void;
@@ -81,6 +82,7 @@ export function SchemaExplorerSidebar({
   metadataDetailLoading,
   metadataDetailError,
   includeExampleMetadata,
+  metadataContextNote,
   selectedSchemaTable,
   onToggle,
   onExplorerModeChange,
@@ -342,6 +344,11 @@ export function SchemaExplorerSidebar({
                 </label>
               </div>
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+                {metadataContextNote && (
+                  <div className="rounded border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-900">
+                    {metadataContextNote}
+                  </div>
+                )}
                 {metadataLoading && (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />

@@ -58,6 +58,8 @@ import { formatWaitingChipLabel } from "./loadingUx";
 
 const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
 const CONVERSATION_HISTORY_STORAGE_KEY = "datachat.conversation.history.v1";
+const WORKFLOW_MODE_STORAGE_KEY = "datachat.workflow_mode.v1";
+const ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada";
 const MAX_CONVERSATION_HISTORY = 20;
 const MAX_CONVERSATION_MESSAGES = 50;
 
@@ -224,6 +226,10 @@ const filterMetadataItems = (
   });
 };
 
+const isEnvironmentConnection = (connection: DatabaseConnection): boolean =>
+  String(connection.connection_id) === ENV_DATABASE_CONNECTION_ID ||
+  (connection.tags || []).includes("env");
+
 export function ChatInterface() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -266,6 +272,7 @@ export function ChatInterface() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [targetDatabaseId, setTargetDatabaseId] = useState<string | null>(null);
   const [conversationDatabaseId, setConversationDatabaseId] = useState<string | null>(null);
+  const [workflowMode, setWorkflowMode] = useState<"auto" | "finance_variance_v1">("auto");
   const [resultLayoutMode, setResultLayoutMode] =
     useState<ResultLayoutMode>("stacked");
   const [showAgentTimingBreakdown, setShowAgentTimingBreakdown] = useState(true);
@@ -340,6 +347,47 @@ export function ChatInterface() {
   );
   const canRunQueries = isInitialized || hasManagedConnection;
 
+  const metadataConnectionId = useMemo(() => {
+    if (!connections.length) {
+      return null;
+    }
+    const selected = connections.find((connection) => connection.connection_id === targetDatabaseId);
+    if (selected && !isEnvironmentConnection(selected)) {
+      return selected.connection_id;
+    }
+    const managedDefault = connections.find(
+      (connection) => !isEnvironmentConnection(connection) && connection.is_default
+    );
+    if (managedDefault) {
+      return managedDefault.connection_id;
+    }
+    const firstManaged = connections.find((connection) => !isEnvironmentConnection(connection));
+    return firstManaged?.connection_id ?? null;
+  }, [connections, targetDatabaseId]);
+
+  const metadataContextNote = useMemo(() => {
+    if (!targetDatabaseId) {
+      return null;
+    }
+    if (!metadataConnectionId) {
+      return "No managed metadata available yet. Run the onboarding wizard to profile, generate, and approve metadata for this source.";
+    }
+    if (targetDatabaseId === metadataConnectionId) {
+      return null;
+    }
+    const selected = connections.find((connection) => connection.connection_id === targetDatabaseId);
+    const metadataConnection = connections.find(
+      (connection) => connection.connection_id === metadataConnectionId
+    );
+    if (!selected || !metadataConnection) {
+      return null;
+    }
+    if (!isEnvironmentConnection(selected)) {
+      return null;
+    }
+    return `Showing metadata for managed connection "${metadataConnection.name}" while target "${selected.name}" is environment-only.`;
+  }, [connections, metadataConnectionId, targetDatabaseId]);
+
   const schemaQuery = useQuery({
     queryKey: ["database-schema", targetDatabaseId],
     queryFn: async () => apiClient.getDatabaseSchema(targetDatabaseId as string),
@@ -347,21 +395,23 @@ export function ChatInterface() {
   });
 
   const pendingMetadataQuery = useQuery({
-    queryKey: ["metadata-pending", targetDatabaseId],
+    queryKey: ["metadata-pending", metadataConnectionId],
     queryFn: async () =>
       apiClient.listPendingDatapoints({
         statusFilter: "pending",
-        connectionId: targetDatabaseId,
+        connectionId: metadataConnectionId,
       }),
+    enabled: Boolean(metadataConnectionId),
   });
 
   const approvedMetadataQuery = useQuery({
-    queryKey: ["metadata-approved", targetDatabaseId],
+    queryKey: ["metadata-approved", metadataConnectionId],
     queryFn: async () =>
       apiClient.listPendingDatapoints({
         statusFilter: "approved",
-        connectionId: targetDatabaseId,
+        connectionId: metadataConnectionId,
       }),
+    enabled: Boolean(metadataConnectionId),
   });
 
   const managedMetadataQuery = useQuery({
@@ -632,6 +682,17 @@ export function ChatInterface() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(WORKFLOW_MODE_STORAGE_KEY);
+    if (saved === "finance_variance_v1" || saved === "auto") {
+      setWorkflowMode(saved);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(WORKFLOW_MODE_STORAGE_KEY, workflowMode);
+  }, [workflowMode]);
 
   useEffect(() => {
     const raw = window.localStorage.getItem(CONVERSATION_HISTORY_STORAGE_KEY);
@@ -916,11 +977,11 @@ export function ChatInterface() {
             payload: null,
           }))
           .filter((item) => {
-            if (!targetDatabaseId) {
+            if (!metadataConnectionId) {
               return true;
             }
             return (
-              item.connectionId === targetDatabaseId ||
+              item.connectionId === metadataConnectionId ||
               item.scope === "global" ||
               item.scope === "shared"
             );
@@ -934,7 +995,7 @@ export function ChatInterface() {
           }),
         metadataSearch
       ),
-    [managedMetadataQuery.data, metadataSearch, targetDatabaseId, includeExampleMetadata]
+    [managedMetadataQuery.data, metadataSearch, metadataConnectionId, includeExampleMetadata]
   );
 
   const allMetadataItems = useMemo(
@@ -1141,6 +1202,7 @@ export function ChatInterface() {
           session_summary: canReuseConversation ? sessionSummary : undefined,
           session_state: canReuseConversation ? sessionState : undefined,
           synthesize_simple_sql: synthesizeSimpleSql,
+          workflow_mode: workflowMode,
           ...(composerMode === "sql"
             ? {
                 execution_mode: "direct_sql" as const,
@@ -1603,7 +1665,7 @@ export function ChatInterface() {
               <div className="min-w-0">
                 <h1 className="text-2xl font-bold">DataChat</h1>
                 <p className="truncate text-sm text-muted-foreground">
-                  Decision-ready answers from your database in minutes
+                  Decision workflows for business decision makers
                 </p>
               </div>
             </div>
@@ -1634,6 +1696,21 @@ export function ChatInterface() {
                   ))}
                 </select>
               )}
+              <select
+                value={workflowMode}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (next === "finance_variance_v1" || next === "auto") {
+                    setWorkflowMode(next);
+                  }
+                }}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                aria-label="Workflow mode"
+                disabled={isLoading}
+              >
+                <option value="auto">Workflow: Auto</option>
+                <option value="finance_variance_v1">Workflow: Finance Brief v1</option>
+              </select>
               <Button
                 variant="outline"
                 size="icon"
@@ -1974,6 +2051,7 @@ export function ChatInterface() {
               selectedMetadataKey && metadataDetailLoadingKey === selectedMetadataKey
             )}
             metadataDetailError={metadataDetailError}
+            metadataContextNote={metadataContextNote}
             selectedSchemaTable={selectedSchemaTable}
             onToggle={() => setIsSchemaSidebarOpen((prev) => !prev)}
             onExplorerModeChange={setExplorerMode}

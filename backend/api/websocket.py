@@ -249,7 +249,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
         initializer = SystemInitializer(app_state)
         status_state = await initializer.status()
-        if not status_state.has_databases:
+        if not status_state.has_databases and not database_url:
             await websocket.send_json(
                 {
                     "event": "error",

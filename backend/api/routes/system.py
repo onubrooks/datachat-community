@@ -350,16 +350,16 @@ async def system_initialize(
         sanitized_system_database_url = None
 
     try:
-        if sanitized_database_url:
-            set_value(TARGET_DB_KEY, sanitized_database_url)
-        if sanitized_system_database_url:
-            set_value(SYSTEM_DB_KEY, sanitized_system_database_url)
-        apply_config_defaults()
         status_state, message = await initializer.initialize(
             database_url=sanitized_database_url,
             auto_profile=payload.auto_profile,
             system_database_url=sanitized_system_database_url,
         )
+        if sanitized_database_url is not None:
+            set_value(TARGET_DB_KEY, sanitized_database_url)
+        if sanitized_system_database_url is not None:
+            set_value(SYSTEM_DB_KEY, sanitized_system_database_url)
+        apply_config_defaults()
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

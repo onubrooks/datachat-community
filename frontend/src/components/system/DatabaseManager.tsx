@@ -386,7 +386,7 @@ export function DatabaseManager() {
     refetchInterval: (query) => {
       const generation = query.state.data as GenerationJob | null | undefined;
       if (!generation) {
-        return activeGenerationJobId || generationProfileId ? 3000 : false;
+        return activeGenerationJobId ? 3000 : false;
       }
       if (!isJobInProgress(generation.status)) {
         return false;
@@ -736,6 +736,11 @@ export function DatabaseManager() {
       setError("Run profiling first to generate metadata.");
       return false;
     }
+    const tablesToGenerate = selectedTables.length > 0 ? selectedTables : profileTables;
+    if (!tablesToGenerate.length) {
+      setError("No profiled tables available yet. Run profiling, then generate metadata.");
+      return false;
+    }
     setError(null);
     if (effectiveGenerationJob?.status === "completed") {
       const confirmReplace = confirm(
@@ -749,10 +754,10 @@ export function DatabaseManager() {
     try {
       const generation = await api.startDatapointGeneration({
         profile_id: profileId,
-        tables: selectedTables,
+        tables: tablesToGenerate,
         depth,
         batch_size: 10,
-        max_tables: selectedTables.length || null,
+        max_tables: tablesToGenerate.length,
         max_metrics_per_table: 3,
         replace_existing: true,
       });
@@ -1012,12 +1017,12 @@ export function DatabaseManager() {
   const generationInProgress = jobs.generating || isJobInProgress(effectiveGenerationJob?.status);
   const syncInProgress = jobs.syncing || isJobInProgress(syncStatus?.status);
   const hasProfileCompleted = Boolean(job?.status === "completed" && job.profile_id);
+  const generatedCandidateCount = pending.length + approved.length;
   const hasPendingDatapoints = pending.length > 0;
   const hasApprovedDatapoints = approved.length > 0;
-  const hasGeneratedMetadata =
-    hasPendingDatapoints ||
-    hasApprovedDatapoints ||
-    effectiveGenerationJob?.status === "completed";
+  const hasGeneratedMetadata = generatedCandidateCount > 0;
+  const generationCompletedWithoutCandidates =
+    effectiveGenerationJob?.status === "completed" && generatedCandidateCount === 0;
   const hasSynced = syncStatus?.status === "completed";
   const onboardingWizardCommand = quickstartConnection
     ? `uv run datachat onboarding wizard --connection-id ${quickstartConnection.connection_id} --metrics-depth metrics_full`
@@ -1322,8 +1327,9 @@ export function DatabaseManager() {
       return {
         key: "generate" as const,
         title: "Step 3: Generate managed metadata",
-        description:
-          "Create managed schema and business metadata from the latest profile.",
+        description: generationCompletedWithoutCandidates
+          ? "Generation finished without metadata candidates. Verify profiled tables and run generation again."
+          : "Create managed schema and business metadata from the latest profile.",
         action: "generate" as WizardAction,
         actionLabel: "Generate Metadata",
         busy: false,
