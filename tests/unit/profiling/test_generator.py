@@ -85,6 +85,8 @@ async def test_generates_schema_datapoints_from_profile():
     assert datapoint["metadata"]["connection_id"] == str(profile.connection_id)
     assert datapoint["metadata"]["semantic_role"] == "fact_event"
     assert "display_hints" in datapoint["metadata"]
+    order_id_column = next(col for col in datapoint["key_columns"] if col["name"] == "order_id")
+    assert order_id_column["sample_values"] == ["1", "2"]
 
 
 @pytest.mark.asyncio

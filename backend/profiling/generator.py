@@ -270,6 +270,8 @@ class DataPointGenerator:
                     business_meaning=meaning,
                     nullable=col.nullable,
                     default_value=col.default_value,
+                    sample_values=col.sample_values[:5],
+                    distinct_count=col.distinct_count,
                 )
             )
 
@@ -332,6 +334,8 @@ class DataPointGenerator:
                 ),
                 nullable=col.nullable,
                 default_value=col.default_value,
+                sample_values=col.sample_values[:5],
+                distinct_count=col.distinct_count,
             )
             for col in table.columns
         ]

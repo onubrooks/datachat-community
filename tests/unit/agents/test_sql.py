@@ -1390,8 +1390,18 @@ class TestDatabaseContext:
                         "status": "completed",
                         "row_count": 100,
                         "columns": [
-                            {"name": "order_id", "data_type": "integer"},
-                            {"name": "total_amount", "data_type": "numeric"},
+                            {
+                                "name": "order_id",
+                                "data_type": "integer",
+                                "distinct_count": 100,
+                                "sample_values": ["1", "2", "3"],
+                            },
+                            {
+                                "name": "status",
+                                "data_type": "text",
+                                "distinct_count": 3,
+                                "sample_values": ["posted", "declined", "reversed"],
+                            },
                         ],
                     },
                     {
@@ -1412,6 +1422,21 @@ class TestDatabaseContext:
         assert "Auto-profile cache snapshot" in context
         assert "public.orders" in context
         assert "public.customers" not in context
+        assert "samples=[posted, declined, reversed]" in context
+
+    def test_select_profile_columns_prioritizes_categorical_tokens(self, sql_agent):
+        selected = sql_agent._select_profile_columns(
+            query="How many positive feedbacks do we have?",
+            columns=[
+                ("feedback_id", "integer"),
+                ("sentiment", "text"),
+                ("created_at", "timestamp"),
+                ("score", "numeric"),
+            ],
+        )
+
+        assert "sentiment" in selected
+        assert selected.index("sentiment") < selected.index("score")
 
     def test_build_semantic_rows_deterministic_classifies_table(self, sql_agent):
         rows = sql_agent._build_semantic_rows_deterministic(

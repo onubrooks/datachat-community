@@ -507,6 +507,10 @@ class VectorStore:
                 segment = f"{col.name} ({col.type})"
                 if meaning:
                     segment = f"{segment}: {meaning}"
+                if getattr(col, "sample_values", None):
+                    preview = ", ".join(col.sample_values[:3])
+                    if preview:
+                        segment = f"{segment} [samples: {preview}]"
                 column_summaries.append(segment)
             if column_summaries:
                 parts.append(f"Key Columns: {'; '.join(column_summaries)}")
