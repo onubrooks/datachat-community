@@ -2452,8 +2452,9 @@ def dev(
 
     if not no_backend:
         apply_config_defaults()
-        provider_env = os.getenv("LLM_DEFAULT_PROVIDER") or os.getenv("LLM_PROVIDER")
+        provider_env = os.getenv("LLM_DEFAULT_PROVIDER")
         default_provider = (provider_env or "openai").strip().lower()
+
         def _is_placeholder_key(value: str | None) -> bool:
             if not value:
                 return True

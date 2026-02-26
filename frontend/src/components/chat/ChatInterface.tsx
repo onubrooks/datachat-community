@@ -147,6 +147,8 @@ type MetadataExplorerItem = {
   name: string;
   type: string;
   status: "pending" | "approved" | "managed";
+  connectionId?: string | null;
+  scope?: string | null;
   description?: string | null;
   businessPurpose?: string | null;
   sqlTemplate?: string | null;
@@ -215,6 +217,8 @@ const filterMetadataItems = (
     const haystack = `${item.id} ${item.name} ${item.type} ${item.description || ""} ${
       item.businessPurpose || ""
     } ${item.tableName || ""} ${(item.relatedTables || []).join(" ")} ${
+      item.connectionId || ""
+    } ${item.scope || ""} ${
       item.sourceTier || ""
     } ${item.sourcePath || ""}`.toLowerCase();
     return haystack.includes(search);
@@ -286,6 +290,7 @@ export function ChatInterface() {
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaSearch, setSchemaSearch] = useState("");
   const [metadataSearch, setMetadataSearch] = useState("");
+  const [includeExampleMetadata, setIncludeExampleMetadata] = useState(false);
   const [explorerMode, setExplorerMode] = useState<"schema" | "metadata">("schema");
   const [selectedMetadataKey, setSelectedMetadataKey] = useState<string | null>(null);
   const [metadataDetailCache, setMetadataDetailCache] = useState<
@@ -904,23 +909,39 @@ export function ChatInterface() {
   const managedMetadataItems = useMemo(
     () =>
       filterMetadataItems(
-        (managedMetadataQuery.data || []).map((item) => ({
-          id: item.datapoint_id,
-          name: item.name || item.datapoint_id,
-          type: item.type || "Unknown",
-          status: "managed" as const,
-          description: null,
-          businessPurpose: null,
-          sqlTemplate: null,
-          tableName: null,
-          relatedTables: [],
-          sourceTier: item.source_tier || null,
-          sourcePath: item.source_path || null,
-          payload: null,
-        })),
+        (managedMetadataQuery.data || [])
+          .map((item) => ({
+            id: item.datapoint_id,
+            name: item.name || item.datapoint_id,
+            type: item.type || "Unknown",
+            status: "managed" as const,
+            connectionId: item.connection_id || null,
+            scope: item.scope || null,
+            description: null,
+            businessPurpose: null,
+            sqlTemplate: null,
+            tableName: null,
+            relatedTables: [],
+            sourceTier: item.source_tier || null,
+            sourcePath: item.source_path || null,
+            payload: null,
+          }))
+          .filter((item) => {
+            if (!targetDatabaseId) {
+              return true;
+            }
+            return (
+              item.connectionId === targetDatabaseId ||
+              item.scope === "global" ||
+              item.scope === "shared"
+            );
+          })
+          .filter((item) =>
+            includeExampleMetadata ? true : item.sourceTier?.toLowerCase() !== "example"
+          ),
         metadataSearch
       ),
-    [managedMetadataQuery.data, metadataSearch]
+    [managedMetadataQuery.data, metadataSearch, targetDatabaseId, includeExampleMetadata]
   );
 
   const allMetadataItems = useMemo(
@@ -1955,6 +1976,8 @@ export function ChatInterface() {
             onExplorerModeChange={setExplorerMode}
             onSearchChange={handleSchemaSearchChange}
             onMetadataSearchChange={setMetadataSearch}
+            includeExampleMetadata={includeExampleMetadata}
+            onIncludeExampleMetadataChange={setIncludeExampleMetadata}
             onSelectMetadataItem={handleSelectMetadataItem}
             onSelectTable={handleSchemaSelectTable}
             onUseTable={handleSchemaUseTable}

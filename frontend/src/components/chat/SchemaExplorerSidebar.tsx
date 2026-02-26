@@ -20,6 +20,8 @@ interface MetadataExplorerItem {
   name: string;
   type: string;
   status: "pending" | "approved" | "managed";
+  connectionId?: string | null;
+  scope?: string | null;
   description?: string | null;
   businessPurpose?: string | null;
   sqlTemplate?: string | null;
@@ -49,11 +51,13 @@ interface SchemaExplorerSidebarProps {
   metadataDetail: Record<string, unknown> | null;
   metadataDetailLoading: boolean;
   metadataDetailError: string | null;
+  includeExampleMetadata: boolean;
   selectedSchemaTable: string | null;
   onToggle: () => void;
   onExplorerModeChange: (mode: "schema" | "metadata") => void;
   onSearchChange: (value: string) => void;
   onMetadataSearchChange: (value: string) => void;
+  onIncludeExampleMetadataChange: (value: boolean) => void;
   onSelectMetadataItem: (item: MetadataExplorerItem) => void;
   onSelectTable: (fullName: string) => void;
   onUseTable: (fullName: string) => void;
@@ -76,11 +80,13 @@ export function SchemaExplorerSidebar({
   metadataDetail,
   metadataDetailLoading,
   metadataDetailError,
+  includeExampleMetadata,
   selectedSchemaTable,
   onToggle,
   onExplorerModeChange,
   onSearchChange,
   onMetadataSearchChange,
+  onIncludeExampleMetadataChange,
   onSelectMetadataItem,
   onSelectTable,
   onUseTable,
@@ -148,6 +154,8 @@ export function SchemaExplorerSidebar({
                         </div>
                       )}
                       {item.tableName && <div>Table: {item.tableName}</div>}
+                      {item.scope && <div>Scope: {item.scope}</div>}
+                      {item.connectionId && <div>Connection: {item.connectionId}</div>}
                       {typeof item.confidence === "number" && (
                         <div>Confidence: {item.confidence.toFixed(2)}</div>
                       )}
@@ -324,6 +332,14 @@ export function SchemaExplorerSidebar({
                   className="h-8 text-xs"
                   aria-label="Search generated and managed metadata"
                 />
+                <label className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={includeExampleMetadata}
+                    onChange={(event) => onIncludeExampleMetadataChange(event.target.checked)}
+                  />
+                  Include example metadata
+                </label>
               </div>
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
                 {metadataLoading && (
