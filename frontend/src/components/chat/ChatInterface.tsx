@@ -226,6 +226,17 @@ const filterMetadataItems = (
   });
 };
 
+const dedupeMetadataItems = (items: MetadataExplorerItem[]): MetadataExplorerItem[] => {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) {
+      return false;
+    }
+    seen.add(item.id);
+    return true;
+  });
+};
+
 const isEnvironmentConnection = (connection: DatabaseConnection): boolean =>
   String(connection.connection_id) === ENV_DATABASE_CONNECTION_ID ||
   (connection.tags || []).includes("env");
@@ -934,76 +945,67 @@ export function ChatInterface() {
     });
   }, [schemaSearch, schemaTables]);
 
-  const pendingMetadataItems = useMemo(
-    () =>
-      filterMetadataItems(
-        (pendingMetadataQuery.data || []).map((item) =>
-          normalizeMetadataItem(item as unknown as Record<string, unknown>, "pending")
-        ),
-        metadataSearch
-      ),
-    [metadataSearch, pendingMetadataQuery.data]
-  );
+  const pendingMetadataItems = useMemo(() => {
+    const items = (pendingMetadataQuery.data || []).map((item) =>
+      normalizeMetadataItem(item as unknown as Record<string, unknown>, "pending")
+    );
+    return filterMetadataItems(dedupeMetadataItems(items), metadataSearch);
+  }, [metadataSearch, pendingMetadataQuery.data]);
 
-  const managedMetadataItems = useMemo(
-    () =>
-      filterMetadataItems(
-        (managedMetadataQuery.data || [])
-          .map((item) => ({
-            id: item.datapoint_id,
-            name: item.name || item.datapoint_id,
-            type: item.type || "Unknown",
-            status: "managed" as const,
-            connectionId: item.connection_id || null,
-            scope: item.scope || null,
-            description: null,
-            businessPurpose: null,
-            sqlTemplate: null,
-            tableName: null,
-            relatedTables: [],
-            sourceTier: item.source_tier || null,
-            sourcePath: item.source_path || null,
-            payload: null,
-          }))
-          .filter((item) => {
-            if (!metadataConnectionId) {
-              return true;
-            }
-            return (
-              item.connectionId === metadataConnectionId ||
-              item.scope === "global" ||
-              item.scope === "shared"
-            );
-          })
-          .filter((item) => {
-            if (includeExampleMetadata) {
-              return true;
-            }
-            const tier = item.sourceTier?.toLowerCase();
-            return tier !== "example" && tier !== "demo";
-          }),
-        metadataSearch
-      ),
-    [managedMetadataQuery.data, metadataSearch, metadataConnectionId, includeExampleMetadata]
-  );
+  const managedMetadataItems = useMemo(() => {
+    const items = (managedMetadataQuery.data || [])
+      .map((item) => ({
+        id: item.datapoint_id,
+        name: item.name || item.datapoint_id,
+        type: item.type || "Unknown",
+        status: "managed" as const,
+        connectionId: item.connection_id || null,
+        scope: item.scope || null,
+        description: null,
+        businessPurpose: null,
+        sqlTemplate: null,
+        tableName: null,
+        relatedTables: [],
+        sourceTier: item.source_tier || null,
+        sourcePath: item.source_path || null,
+        payload: null,
+      }))
+      .filter((item) => {
+        if (!metadataConnectionId) {
+          return true;
+        }
+        if (!item.connectionId && !item.scope) {
+          return true;
+        }
+        return (
+          item.connectionId === metadataConnectionId ||
+          item.scope === "global" ||
+          item.scope === "shared"
+        );
+      })
+      .filter((item) => {
+        if (includeExampleMetadata) {
+          return true;
+        }
+        const tier = item.sourceTier?.toLowerCase();
+        return tier !== "example" && tier !== "demo";
+      });
+    return filterMetadataItems(dedupeMetadataItems(items), metadataSearch);
+  }, [managedMetadataQuery.data, metadataSearch, metadataConnectionId, includeExampleMetadata]);
 
   const managedMetadataIds = useMemo(
     () => new Set(managedMetadataItems.map((item) => item.id)),
     [managedMetadataItems]
   );
 
-  const approvedMetadataItems = useMemo(
-    () =>
-      filterMetadataItems(
-        (approvedMetadataQuery.data || [])
-          .map((item) =>
-            normalizeMetadataItem(item as unknown as Record<string, unknown>, "approved")
-          )
-          .filter((item) => !managedMetadataIds.has(item.id)),
-        metadataSearch
-      ),
-    [approvedMetadataQuery.data, managedMetadataIds, metadataSearch]
-  );
+  const approvedMetadataItems = useMemo(() => {
+    const items = (approvedMetadataQuery.data || [])
+      .map((item) =>
+        normalizeMetadataItem(item as unknown as Record<string, unknown>, "approved")
+      )
+      .filter((item) => !managedMetadataIds.has(item.id));
+    return filterMetadataItems(dedupeMetadataItems(items), metadataSearch);
+  }, [approvedMetadataQuery.data, managedMetadataIds, metadataSearch]);
 
   const allMetadataItems = useMemo(
     () => [...pendingMetadataItems, ...approvedMetadataItems, ...managedMetadataItems],

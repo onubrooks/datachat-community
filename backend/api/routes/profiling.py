@@ -539,14 +539,15 @@ async def approve_datapoint(
     profile = await store.get_profile(pending_item.profile_id)
     _attach_connection_metadata(datapoint, profile.connection_id)
 
-    pending = await store.update_pending_status(
-        pending_id,
-        status="approved",
-        review_note=payload.review_note if payload else None,
-        datapoint=datapoint.model_dump(mode="json", by_alias=True),
-    )
-
     from backend.sync.orchestrator import save_datapoint_to_disk
+
+    # Write to retrieval stores first. Mark as approved only after this succeeds.
+    await vector_store.add_datapoints([datapoint])
+    graph.add_datapoint(datapoint)
+    save_datapoint_to_disk(
+        datapoint.model_dump(mode="json", by_alias=True),
+        _datapoint_path(datapoint.datapoint_id),
+    )
 
     table_keys = _extract_table_keys(datapoint)
     if table_keys:
@@ -561,12 +562,13 @@ async def approve_datapoint(
             await vector_store.delete(sorted(removed_ids))
             for removed_id in sorted(removed_ids):
                 graph.remove_datapoint(removed_id)
-    save_datapoint_to_disk(
-        datapoint.model_dump(mode="json", by_alias=True),
-        _datapoint_path(datapoint.datapoint_id),
+
+    pending = await store.update_pending_status(
+        pending_id,
+        status="approved",
+        review_note=payload.review_note if payload else None,
+        datapoint=datapoint.model_dump(mode="json", by_alias=True),
     )
-    await vector_store.add_datapoints([datapoint])
-    graph.add_datapoint(datapoint)
 
     return _to_pending_response(pending)
 
@@ -616,30 +618,17 @@ async def bulk_approve_datapoints(
         _attach_connection_metadata(datapoint, profile_connection_ids[item.profile_id])
         datapoints_by_pending_id[item.pending_id] = datapoint
 
-    approved = await store.bulk_update_pending(
-        status="approved",
-        connection_id=connection_id,
-        pending_ids=list(datapoints_by_pending_id.keys()),
-    )
-    datapoints: list[DataPoint] = []
-    for item in approved:
-        datapoint = datapoints_by_pending_id.get(item.pending_id)
-        if datapoint is None:
-            try:
-                datapoint = TypeAdapter(DataPoint).validate_python(item.datapoint)
-            except ValidationError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        "Invalid DataPoint payload in approved item "
-                        f"{item.pending_id}: {exc.errors()[0]['msg']}"
-                    ),
-                ) from exc
-            _validate_datapoint_contract_or_400(datapoint)
-            profile = await store.get_profile(item.profile_id)
-            _attach_connection_metadata(datapoint, profile.connection_id)
-        datapoints.append(datapoint)
+    datapoints = list(datapoints_by_pending_id.values())
     if datapoints:
+        # Write to retrieval stores first. Mark as approved only after this succeeds.
+        await vector_store.add_datapoints(datapoints)
+        for datapoint in datapoints:
+            graph.add_datapoint(datapoint)
+            save_datapoint_to_disk(
+                datapoint.model_dump(mode="json", by_alias=True),
+                _datapoint_path(datapoint.datapoint_id),
+            )
+
         exclude_ids = {datapoint.datapoint_id for datapoint in datapoints}
         removed_ids: set[str] = set()
         table_keys: set[str] = set()
@@ -653,14 +642,12 @@ async def bulk_approve_datapoints(
             await vector_store.delete(sorted(removed_ids))
             for removed_id in sorted(removed_ids):
                 graph.remove_datapoint(removed_id)
-        for datapoint in datapoints:
-            save_datapoint_to_disk(
-                datapoint.model_dump(mode="json", by_alias=True),
-                _datapoint_path(datapoint.datapoint_id),
-            )
-        await vector_store.add_datapoints(datapoints)
-        for datapoint in datapoints:
-            graph.add_datapoint(datapoint)
+
+    approved = await store.bulk_update_pending(
+        status="approved",
+        connection_id=connection_id,
+        pending_ids=list(datapoints_by_pending_id.keys()),
+    )
 
     return PendingDataPointListResponse(
         pending=[_to_pending_response(item) for item in approved]

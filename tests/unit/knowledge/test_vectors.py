@@ -632,6 +632,12 @@ class TestDocumentCreation:
         assert "Type: Process" in doc
         assert "Schedule: 0 1 * * *" in doc
 
+    def test_truncate_document_caps_embedding_payload(self, test_vector_store):
+        """Embedding payloads should be truncated to configured safety limit."""
+        long_document = "x" * (test_vector_store.max_document_chars + 2000)
+        truncated = test_vector_store._truncate_document(long_document, "dp_test_long")
+        assert len(truncated) == test_vector_store.max_document_chars
+
 
 class TestMetadataCreation:
     """Test metadata creation from DataPoints."""

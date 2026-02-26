@@ -8,6 +8,7 @@ Supports semantic search, persistence, and metadata storage.
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,9 @@ class VectorStore:
         self.client: chromadb.ClientAPI | None = None
         self.collection: chromadb.Collection | None = None
         self.embedding_function: OpenAIEmbeddingFunction | None = None
+        # Keep embedding payloads below common context windows for small models.
+        self.max_document_chars = 6000
+        self.max_field_chars = 1200
 
         logger.info(
             f"VectorStore initialized: collection={self.collection_name}, "
@@ -180,7 +184,10 @@ class VectorStore:
 
                 # Prepare batch data
                 ids = [dp.datapoint_id for dp in batch]
-                documents = [self._create_document(dp) for dp in batch]
+                documents = [
+                    self._truncate_document(self._create_document(dp), dp.datapoint_id)
+                    for dp in batch
+                ]
                 metadatas = [self._create_metadata(dp) for dp in batch]
 
                 # Add to Chroma (async wrapper)
@@ -200,6 +207,22 @@ class VectorStore:
         except Exception as e:
             logger.error(f"Failed to add datapoints: {e}")
             raise VectorStoreError(f"Failed to add datapoints: {e}") from e
+
+    def _truncate_document(self, text: str, datapoint_id: str) -> str:
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if len(normalized) <= self.max_document_chars:
+            return normalized
+        logger.warning(
+            "Truncating embedding payload for datapoint %s from %s to %s chars",
+            datapoint_id,
+            len(normalized),
+            self.max_document_chars,
+        )
+        return normalized[: self.max_document_chars]
+
+    def _clip_text(self, value: str, max_chars: int | None = None) -> str:
+        limit = max_chars if max_chars is not None else self.max_field_chars
+        return value if len(value) <= limit else f"{value[:limit]}..."
 
     async def search(
         self,
@@ -499,16 +522,19 @@ class VectorStore:
 
         # Add type-specific fields
         if hasattr(datapoint, "business_purpose"):
-            parts.append(f"Purpose: {datapoint.business_purpose}")
+            parts.append(f"Purpose: {self._clip_text(str(datapoint.business_purpose))}")
         if hasattr(datapoint, "key_columns") and datapoint.key_columns:
             column_summaries = []
             for col in datapoint.key_columns[:12]:
                 meaning = col.business_meaning if col.business_meaning else ""
                 segment = f"{col.name} ({col.type})"
                 if meaning:
-                    segment = f"{segment}: {meaning}"
+                    segment = f"{segment}: {self._clip_text(str(meaning), 240)}"
                 if getattr(col, "sample_values", None):
-                    preview = ", ".join(col.sample_values[:3])
+                    preview = ", ".join(
+                        self._clip_text(str(sample), 80)
+                        for sample in col.sample_values[:3]
+                    )
                     if preview:
                         segment = f"{segment} [samples: {preview}]"
                 column_summaries.append(segment)
@@ -521,18 +547,27 @@ class VectorStore:
             ]
             parts.append(f"Relationships: {'; '.join(rels)}")
         if hasattr(datapoint, "common_queries") and datapoint.common_queries:
-            parts.append(f"Common Queries: {'; '.join(datapoint.common_queries[:5])}")
+            parts.append(
+                "Common Queries: "
+                + "; ".join(self._clip_text(str(query), 320) for query in datapoint.common_queries[:5])
+            )
         if hasattr(datapoint, "gotchas") and datapoint.gotchas:
-            parts.append(f"Gotchas: {'; '.join(datapoint.gotchas[:5])}")
+            parts.append(
+                "Gotchas: "
+                + "; ".join(self._clip_text(str(note), 240) for note in datapoint.gotchas[:5])
+            )
 
         if hasattr(datapoint, "calculation"):
-            parts.append(f"Calculation: {datapoint.calculation}")
+            parts.append(f"Calculation: {self._clip_text(str(datapoint.calculation), 1200)}")
 
         if hasattr(datapoint, "synonyms") and datapoint.synonyms:
             parts.append(f"Synonyms: {', '.join(datapoint.synonyms)}")
 
         if hasattr(datapoint, "business_rules") and datapoint.business_rules:
-            parts.append(f"Rules: {'; '.join(datapoint.business_rules)}")
+            parts.append(
+                "Rules: "
+                + "; ".join(self._clip_text(str(rule), 240) for rule in datapoint.business_rules[:10])
+            )
 
         if hasattr(datapoint, "table_name"):
             parts.append(f"Table: {datapoint.table_name}")
@@ -547,9 +582,9 @@ class VectorStore:
             parts.append(f"Dependencies: {', '.join(datapoint.dependencies[:10])}")
 
         if hasattr(datapoint, "sql_template"):
-            parts.append(f"SQL Template: {datapoint.sql_template}")
+            parts.append(f"SQL Template: {self._clip_text(str(datapoint.sql_template), 1600)}")
         if hasattr(datapoint, "description") and datapoint.type == "Query":
-            parts.append(f"Query Description: {datapoint.description}")
+            parts.append(f"Query Description: {self._clip_text(str(datapoint.description), 500)}")
         if hasattr(datapoint, "parameters") and datapoint.parameters:
             param_list = [f"{name}: {p.type}" for name, p in datapoint.parameters.items()]
             parts.append(f"Parameters: {', '.join(param_list[:10])}")
