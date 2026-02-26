@@ -28,7 +28,11 @@ import {
   Keyboard,
   FileCode2,
 } from "lucide-react";
-import { Message, type MessageFeedbackPayload } from "./Message";
+import {
+  Message,
+  type MessageFeedbackPayload,
+  type MessageTrainPayload,
+} from "./Message";
 import { ConversationHistorySidebar } from "./ConversationHistorySidebar";
 import { SchemaExplorerSidebar } from "./SchemaExplorerSidebar";
 import type { ConversationSnapshot, SerializedMessage } from "./chatTypes";
@@ -240,6 +244,29 @@ const isEnvironmentConnection = (connection: DatabaseConnection): boolean =>
   String(connection.connection_id) === ENV_DATABASE_CONNECTION_ID ||
   (connection.tags || []).includes("env");
 
+const slugifyDatapointToken = (value: string): string => {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+  return slug || "custom_query";
+};
+
+const extractRelatedTablesFromSql = (sql: string): string[] => {
+  const matches = sql.match(/\b(?:from|join)\s+([a-zA-Z0-9_."]+)/gi) || [];
+  const cleaned = matches
+    .map((entry) =>
+      entry
+        .replace(/\b(?:from|join)\s+/i, "")
+        .replace(/["`]/g, "")
+        .trim()
+        .toLowerCase()
+    )
+    .filter(Boolean);
+  return Array.from(new Set(cleaned));
+};
+
 export function ChatInterface() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -316,6 +343,15 @@ export function ChatInterface() {
   const [conversationSearch, setConversationSearch] = useState("");
   const [composerMode, setComposerMode] = useState<"nl" | "sql">("nl");
   const [sqlDraft, setSqlDraft] = useState("");
+  const [trainModalOpen, setTrainModalOpen] = useState(false);
+  const [trainQuestion, setTrainQuestion] = useState("");
+  const [trainSql, setTrainSql] = useState("");
+  const [trainName, setTrainName] = useState("");
+  const [trainNotes, setTrainNotes] = useState("");
+  const [trainRelatedTables, setTrainRelatedTables] = useState("");
+  const [trainSubmitting, setTrainSubmitting] = useState(false);
+  const [trainError, setTrainError] = useState<string | null>(null);
+  const [trainNotice, setTrainNotice] = useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const sqlEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -1139,19 +1175,21 @@ export function ChatInterface() {
   };
 
   // Handle send message
-  const handleSend = async () => {
-    const naturalLanguageQuery = input.trim();
-    const sqlQuery = sqlDraft.trim();
+  const handleSend = async (override?: { mode?: "nl" | "sql"; message?: string }) => {
+    const requestMode = override?.mode || composerMode;
+    const naturalLanguageQuery =
+      requestMode === "nl" ? (override?.message ?? input).trim() : input.trim();
+    const sqlQuery = requestMode === "sql" ? (override?.message ?? sqlDraft).trim() : sqlDraft.trim();
     if (isLoading || !canRunQueries) return;
-    if (composerMode === "nl" && !naturalLanguageQuery) return;
-    if (composerMode === "sql" && !sqlQuery) return;
+    if (requestMode === "nl" && !naturalLanguageQuery) return;
+    if (requestMode === "sql" && !sqlQuery) return;
 
     const userVisibleQuery =
-      composerMode === "sql"
+      requestMode === "sql"
         ? sqlQuery
         : naturalLanguageQuery;
     const requestMessage =
-      composerMode === "sql"
+      requestMode === "sql"
         ? sqlQuery
         : naturalLanguageQuery;
     const requestDatabaseId = targetDatabaseId || null;
@@ -1167,7 +1205,7 @@ export function ChatInterface() {
       : [];
 
     setInput("");
-    if (composerMode === "sql") {
+    if (requestMode === "sql") {
       setSqlDraft("");
     }
     setError(null);
@@ -1202,7 +1240,7 @@ export function ChatInterface() {
           session_state: canReuseConversation ? sessionState : undefined,
           synthesize_simple_sql: synthesizeSimpleSql,
           workflow_mode: "auto",
-          ...(composerMode === "sql"
+          ...(requestMode === "sql"
             ? {
                 execution_mode: "direct_sql" as const,
                 sql: sqlQuery,
@@ -1290,7 +1328,7 @@ export function ChatInterface() {
             setError(message);
             setErrorCategory(categorizeError(message));
             setLastFailedQuery(
-              composerMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
+              requestMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
             );
             setRetryCount((c) => c + 1);
             setLoading(false);
@@ -1321,7 +1359,7 @@ export function ChatInterface() {
       setError(errorMessage);
       setErrorCategory(categorizeError(errorMessage));
       setLastFailedQuery(
-        composerMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
+        requestMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
       );
       setRetryCount((c) => c + 1);
       setLoading(false);
@@ -1363,6 +1401,111 @@ export function ChatInterface() {
     setErrorCategory(null);
     setLastFailedQuery(null);
     restoreInputFocus("sql");
+  };
+
+  const findSourceQuestionForMessage = useCallback(
+    (messageId: string): string => {
+      const index = messages.findIndex((item) => item.id === messageId);
+      if (index < 0) {
+        return "";
+      }
+      for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+        if (messages[cursor]?.role === "user") {
+          return messages[cursor]?.content?.trim() || "";
+        }
+      }
+      return "";
+    },
+    [messages]
+  );
+
+  const handleOpenTrainModal = (payload: MessageTrainPayload) => {
+    const fallbackQuestion = findSourceQuestionForMessage(payload.message_id);
+    const nextQuestion = (payload.question || fallbackQuestion || "").trim();
+    const related = extractRelatedTablesFromSql(payload.sql || "");
+    setTrainQuestion(nextQuestion);
+    setTrainSql((payload.sql || "").trim());
+    setTrainName(
+      nextQuestion
+        ? `User-trained: ${nextQuestion.slice(0, 80)}`
+        : "User-trained query datapoint"
+    );
+    setTrainNotes("");
+    setTrainRelatedTables(related.join(", "));
+    setTrainError(null);
+    setTrainNotice(null);
+    setTrainModalOpen(true);
+  };
+
+  const handleSubmitTrainDatapoint = async () => {
+    const sql = trainSql.trim();
+    const question = trainQuestion.trim();
+    if (!sql) {
+      setTrainError("SQL is required to train a query datapoint.");
+      return;
+    }
+    if (!question) {
+      setTrainError("Question context is required.");
+      return;
+    }
+
+    const relatedFromText = trainRelatedTables
+      .split(",")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean);
+    const relatedTables = Array.from(
+      new Set([...relatedFromText, ...extractRelatedTablesFromSql(sql)])
+    ).slice(0, 20);
+
+    const connectionId =
+      metadataConnectionId &&
+      metadataConnectionId !== ENV_DATABASE_CONNECTION_ID
+        ? metadataConnectionId
+        : null;
+
+    const datapointId = `query_user_trained_${slugifyDatapointToken(question)}_${String(
+      Date.now()
+    ).slice(-6)}`;
+    const payload: Record<string, unknown> = {
+      datapoint_id: datapointId,
+      type: "Query",
+      name: trainName.trim() || `User-trained query: ${question.slice(0, 80)}`,
+      owner: "trainer@datachat.local",
+      tags: ["user", "training", "query-template"],
+      metadata: {
+        source: "ui_train_datapoint",
+        source_tier: "user",
+        scope: connectionId ? "database" : "global",
+        connection_id: connectionId,
+        trained_from_question: question,
+        training_note: trainNotes.trim() || null,
+      },
+      description:
+        trainNotes.trim() ||
+        `User-trained query datapoint for: ${question}. Added from chat feedback loop.`,
+      sql_template: sql,
+      parameters: {},
+      validation: {
+        max_rows: 1000,
+      },
+      related_tables: relatedTables,
+    };
+
+    try {
+      setTrainSubmitting(true);
+      setTrainError(null);
+      await apiClient.createDatapoint(payload);
+      await queryClient.invalidateQueries({ queryKey: ["metadata-managed"] });
+      setTrainNotice("Datapoint saved. Re-running your question with the updated context...");
+      setTrainModalOpen(false);
+      setComposerMode("nl");
+      await handleSend({ mode: "nl", message: question });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create training datapoint.";
+      setTrainError(message);
+    } finally {
+      setTrainSubmitting(false);
+    }
   };
 
   const handleStartNewConversation = () => {
@@ -1553,6 +1696,14 @@ export function ChatInterface() {
       });
     }
   }, [shortcutsOpen]);
+
+  useEffect(() => {
+    if (!trainNotice) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setTrainNotice(null), 6000);
+    return () => window.clearTimeout(timeout);
+  }, [trainNotice]);
 
   useEffect(() => {
     const handleGlobalShortcuts = (event: KeyboardEvent) => {
@@ -1782,6 +1933,11 @@ export function ChatInterface() {
                   (or run <strong>datachat demo</strong>) to enable chat.
                 </div>
               )}
+              {trainNotice && (
+                <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                  {trainNotice}
+                </div>
+              )}
               {messages.length === 0 && (
                 <div className="flex h-full items-center justify-center text-muted-foreground">
                   <div className="text-center">
@@ -1796,21 +1952,32 @@ export function ChatInterface() {
                 </div>
               )}
 
-              {messages.map((message) => (
-                <Message
-                  key={message.id}
-                  message={message}
-                  displayMode={resultLayoutMode}
-                  showAgentTimingBreakdown={showAgentTimingBreakdown}
-                  onEditSqlDraft={handleOpenSqlEditor}
-                  onSubmitFeedback={handleSubmitFeedback}
-                  onClarifyingAnswer={(question) => {
-                    setComposerMode("nl");
-                    setInput(`Regarding "${question}": `);
-                    restoreInputFocus("nl");
-                  }}
-                />
-              ))}
+              {messages.map((message, index) => {
+                let sourceQuestion = "";
+                for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+                  if (messages[cursor]?.role === "user") {
+                    sourceQuestion = messages[cursor]?.content || "";
+                    break;
+                  }
+                }
+                return (
+                  <Message
+                    key={message.id}
+                    message={message}
+                    sourceQuestion={sourceQuestion}
+                    displayMode={resultLayoutMode}
+                    showAgentTimingBreakdown={showAgentTimingBreakdown}
+                    onEditSqlDraft={handleOpenSqlEditor}
+                    onTrainDatapoint={handleOpenTrainModal}
+                    onSubmitFeedback={handleSubmitFeedback}
+                    onClarifyingAnswer={(question) => {
+                      setComposerMode("nl");
+                      setInput(`Regarding "${question}": `);
+                      restoreInputFocus("nl");
+                    }}
+                  />
+                );
+              })}
 
               {isLoading && showLiveReasoning && (
                 <Card className="mb-4 border-primary/20 bg-primary/5">
@@ -2049,6 +2216,94 @@ export function ChatInterface() {
           />
         </div>
       </div>
+      {trainModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Train DataChat"
+        >
+          <div className="w-full max-w-2xl rounded-lg bg-background p-6 shadow-lg">
+            <h3 className="text-base font-semibold">Train DataChat</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Create a managed query datapoint from this answer, then retry the question.
+            </p>
+            <div className="mt-4 space-y-3">
+              <label className="block text-xs font-medium text-foreground">
+                Question context
+                <Input
+                  value={trainQuestion}
+                  onChange={(event) => setTrainQuestion(event.target.value)}
+                  placeholder="Which question should this datapoint answer?"
+                  className="mt-1"
+                />
+              </label>
+              <label className="block text-xs font-medium text-foreground">
+                SQL template
+                <textarea
+                  value={trainSql}
+                  onChange={(event) => setTrainSql(event.target.value)}
+                  className="mt-1 min-h-[140px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  placeholder="SELECT ..."
+                />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block text-xs font-medium text-foreground">
+                  Datapoint name
+                  <Input
+                    value={trainName}
+                    onChange={(event) => setTrainName(event.target.value)}
+                    placeholder="User-trained query datapoint"
+                    className="mt-1"
+                  />
+                </label>
+                <label className="block text-xs font-medium text-foreground">
+                  Related tables
+                  <Input
+                    value={trainRelatedTables}
+                    onChange={(event) => setTrainRelatedTables(event.target.value)}
+                    placeholder="public.table_a, public.table_b"
+                    className="mt-1"
+                  />
+                </label>
+              </div>
+              <label className="block text-xs font-medium text-foreground">
+                Notes (optional)
+                <textarea
+                  value={trainNotes}
+                  onChange={(event) => setTrainNotes(event.target.value)}
+                  className="mt-1 min-h-[90px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  placeholder="What was wrong and how should DataChat answer this next time?"
+                />
+              </label>
+              {trainError && (
+                <div className="rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {trainError}
+                </div>
+              )}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (trainSubmitting) {
+                    return;
+                  }
+                  setTrainModalOpen(false);
+                  setTrainError(null);
+                }}
+                disabled={trainSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleSubmitTrainDatapoint} disabled={trainSubmitting}>
+                {trainSubmitting ? <Loader2 size={14} className="mr-2 animate-spin" /> : null}
+                Save and Retry
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {shortcutsOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"

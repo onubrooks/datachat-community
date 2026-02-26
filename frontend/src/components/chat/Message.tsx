@@ -52,8 +52,10 @@ interface MessageProps {
   message: MessageType;
   displayMode?: ResultLayoutMode;
   showAgentTimingBreakdown?: boolean;
+  sourceQuestion?: string | null;
   onClarifyingAnswer?: (question: string) => void;
   onEditSqlDraft?: (sql: string) => void;
+  onTrainDatapoint?: (payload: MessageTrainPayload) => void;
   onSubmitFeedback?: (payload: MessageFeedbackPayload) => Promise<void>;
 }
 
@@ -67,6 +69,13 @@ export interface MessageFeedbackPayload {
   answer?: string | null;
   sql?: string | null;
   sources?: Array<Record<string, unknown>>;
+}
+
+export interface MessageTrainPayload {
+  message_id: string;
+  question: string;
+  sql: string;
+  answer?: string | null;
 }
 
 type TabId = "answer" | "sql" | "table" | "visualization" | "sources" | "timing";
@@ -248,8 +257,10 @@ export function Message({
   message,
   displayMode = "stacked",
   showAgentTimingBreakdown = true,
+  sourceQuestion,
   onClarifyingAnswer,
   onEditSqlDraft,
+  onTrainDatapoint,
   onSubmitFeedback,
 }: MessageProps) {
   const isUser = message.role === "user";
@@ -1631,6 +1642,24 @@ export function Message({
                   <Link2 size={12} />
                   Share Link
                 </button>
+                {activeSql && onTrainDatapoint && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                    onClick={() =>
+                      onTrainDatapoint({
+                        message_id: message.id,
+                        question: (activeSubAnswer?.query || sourceQuestion || "").trim(),
+                        sql: activeSql,
+                        answer: activeContent || null,
+                      })
+                    }
+                    aria-label="Train DataChat from this result"
+                  >
+                    <Lightbulb size={12} />
+                    Train DataChat
+                  </button>
+                )}
                 {!onSubmitFeedback && actionNotice && (
                   <span className="text-muted-foreground" role="status" aria-live="polite">
                     {actionNotice}
