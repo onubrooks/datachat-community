@@ -1235,9 +1235,15 @@ export function ChatInterface() {
             restoreInputFocus();
           },
           onSystemNotInitialized: (steps, message) => {
+            const setupMessage =
+              message ||
+              "Not initialized yet. Complete onboarding to connect a target database, then ask your first question.";
+            updateLastMessage({
+              content: setupMessage,
+            });
             setIsInitialized(false);
             setSetupSteps(steps);
-            setSetupError(message);
+            setSetupError(setupMessage);
             setLoading(false);
             setThinkingNotes([]);
             resetAgentStatus();
@@ -1594,7 +1600,7 @@ export function ChatInterface() {
               <div className="min-w-0">
                 <h1 className="text-2xl font-bold">DataChat</h1>
                 <p className="truncate text-sm text-muted-foreground">
-                  Ask questions in natural language
+                  Decision-ready answers from your database in minutes
                 </p>
               </div>
             </div>

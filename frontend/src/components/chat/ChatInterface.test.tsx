@@ -198,6 +198,50 @@ describe("ChatInterface target database", () => {
     });
   });
 
+  it("renders an inline assistant message when setup is required", async () => {
+    let handlers:
+      | {
+          onSystemNotInitialized?: (
+            steps: Array<{ step: string; title: string; description: string; action: string }>,
+            message?: string
+          ) => void;
+        }
+      | undefined;
+
+    mockStreamChat.mockImplementation((_request, callbacks) => {
+      handlers = callbacks;
+    });
+
+    renderWithProviders(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    const input = screen.getByPlaceholderText("Ask a question about your data...");
+    fireEvent.change(input, { target: { value: "list all available tables" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      handlers?.onSystemNotInitialized?.(
+        [
+          {
+            step: "database_connection",
+            title: "Connect a target database",
+            description: "Provide the database you want DataChat to query.",
+            action: "configure_database",
+          },
+        ],
+        "Not initialized yet. Complete onboarding to connect a target database, then ask your first question."
+      );
+    });
+
+    expect(
+      screen.getAllByText(
+        "Not initialized yet. Complete onboarding to connect a target database, then ask your first question."
+      ).length
+    ).toBeGreaterThan(0);
+  });
+
   it("preserves sub-answers from websocket completion for multi-question rendering", async () => {
     let handlers:
       | {
