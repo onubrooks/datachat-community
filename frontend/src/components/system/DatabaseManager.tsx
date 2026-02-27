@@ -17,6 +17,7 @@ import {
   ProfilingJob,
   SyncStatusResponse,
 } from "@/lib/api";
+import { useChatStore } from "@/lib/stores/chat";
 
 const api = new DataChatAPI();
 const ENV_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada";
@@ -128,6 +129,7 @@ export function DatabaseManager() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const clearChatStoreMessages = useChatStore((state) => state.clearMessages);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncScopeMode, setSyncScopeMode] = useState<"auto" | "global" | "database">("auto");
   const [syncScopeConnectionId, setSyncScopeConnectionId] = useState<string | null>(null);
@@ -910,6 +912,7 @@ export function DatabaseManager() {
     setError(null);
     try {
       await api.systemReset();
+      clearChatStoreMessages();
       if (typeof window !== "undefined") {
         window.localStorage.removeItem(CHAT_SESSION_STORAGE_KEY);
         window.localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
