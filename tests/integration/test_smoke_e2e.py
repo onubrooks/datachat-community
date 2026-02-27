@@ -270,7 +270,7 @@ class _FakeEmbeddingFunction:
         return {"model_name": self.model_name or "smoke-fake"}
 
     @classmethod
-    def build_from_config(cls, config: dict[str, str]) -> "_FakeEmbeddingFunction":
+    def build_from_config(cls, config: dict[str, str]) -> _FakeEmbeddingFunction:
         return cls(model_name=config.get("model_name"))
 
     @staticmethod
@@ -394,14 +394,9 @@ def test_smoke_e2e_onboarding_ask_train_reset(monkeypatch: pytest.MonkeyPatch):
         assert get_response.status_code == 200, get_response.text
 
     # 4) Reset
-    reset = runner.invoke(
-        cli,
-        [
-            "reset",
-            "--yes",
-            "--include-target",
-            "--drop-all-target",
-        ],
-    )
+    reset_args = ["reset", "--yes", "--include-target"]
+    if engine == "postgresql":
+        reset_args.append("--drop-all-target")
+    reset = runner.invoke(cli, reset_args)
     assert reset.exit_code == 0, reset.output
     assert "reset complete" in reset.output.lower()
