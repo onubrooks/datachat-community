@@ -59,7 +59,7 @@ Then choose one database setup path:
 - Path A (quickest): set `DATABASE_URL` and one LLM provider key directly in `.env`.
 - Path B (wizard): start the app, set LLM provider + API key in **Settings**, then add target DB in the onboarding wizard.
 
-Important: Chroma vector indexing currently uses OpenAI embeddings. Set `LLM_OPENAI_API_KEY` even if your default chat provider is Google, Anthropic, or local.
+Important: Chroma vector indexing currently uses OpenAI embeddings. Set `LLM_OPENAI_API_KEY` in `.env` or in **Settings** even if your default chat provider is Google, Anthropic, or local.
 
 `SYSTEM_DATABASE_URL` is optional for basic querying. Add/save it in **Settings** when you want managed connections, profiling, and metadata generation.
 
@@ -142,7 +142,7 @@ LLM_OPENAI_API_KEY=...
 ```
 
 Use this when you want immediate querying with minimal setup.
-`LLM_OPENAI_API_KEY` is still required for Chroma embeddings even when another provider is selected for chat generation.
+`LLM_OPENAI_API_KEY` is still required for Chroma embeddings even when another provider is selected for chat generation. You can set it in `.env` or in **Settings**.
 
 You can also set both values in **Settings** after startup.
 

@@ -13,7 +13,7 @@ Use this before public announcements.
 
 - [ ] Fresh clone + env setup + startup completes.
 - [ ] LLM provider + API key can be set from Settings on first run.
-- [ ] `LLM_OPENAI_API_KEY` is set (required for Chroma embeddings even when main chat provider is not OpenAI).
+- [ ] `LLM_OPENAI_API_KEY` is set in `.env` or **Settings** (required for Chroma embeddings even when main chat provider is not OpenAI).
 - [ ] Optional `SYSTEM_DATABASE_URL` can be added/saved in Settings.
 - [ ] First successful question asked in <= 5 minutes.
 - [ ] UI onboarding wizard flow works: connect DB -> generate metadata -> ask first question.
