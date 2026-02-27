@@ -180,6 +180,15 @@ class MySQLConnector(BaseConnector):
             conn.close()
 
     def _get_schema_sync(self, schema_name: str) -> list[TableInfo]:
+        def _ci_get(row: dict[str, Any], key: str, default: Any = None) -> Any:
+            if key in row:
+                return row[key]
+            lowered = key.lower()
+            for existing_key, value in row.items():
+                if str(existing_key).lower() == lowered:
+                    return value
+            return default
+
         conn = mysql.connector.connect(**self._connection_kwargs())
         cursor = conn.cursor(dictionary=True)
         try:
@@ -196,11 +205,13 @@ class MySQLConnector(BaseConnector):
 
             table_infos: list[TableInfo] = []
             for table_row in tables:
-                table_schema = str(table_row["table_schema"])
-                table_name = str(table_row["table_name"])
-                table_type = str(table_row["table_type"])
+                table_schema = str(_ci_get(table_row, "table_schema"))
+                table_name = str(_ci_get(table_row, "table_name"))
+                table_type = str(_ci_get(table_row, "table_type"))
                 row_count = (
-                    int(table_row["table_rows"]) if table_row.get("table_rows") is not None else None
+                    int(_ci_get(table_row, "table_rows"))
+                    if _ci_get(table_row, "table_rows") is not None
+                    else None
                 )
 
                 cursor.execute(
@@ -234,28 +245,28 @@ class MySQLConnector(BaseConnector):
                 )
                 fk_rows = cursor.fetchall()
                 fk_map = {
-                    str(row["column_name"]): (
-                        str(row["foreign_table_name"]),
-                        str(row["foreign_column_name"]),
+                    str(_ci_get(row, "column_name")): (
+                        str(_ci_get(row, "foreign_table_name")),
+                        str(_ci_get(row, "foreign_column_name")),
                     )
                     for row in fk_rows
                 }
 
                 columns: list[ColumnInfo] = []
                 for col_row in columns_rows:
-                    col_name = str(col_row["column_name"])
+                    col_name = str(_ci_get(col_row, "column_name"))
                     fk_target = fk_map.get(col_name)
                     columns.append(
                         ColumnInfo(
                             name=col_name,
-                            data_type=str(col_row["column_type"]),
-                            is_nullable=str(col_row["is_nullable"]).upper() == "YES",
+                            data_type=str(_ci_get(col_row, "column_type")),
+                            is_nullable=str(_ci_get(col_row, "is_nullable")).upper() == "YES",
                             default_value=(
-                                str(col_row["column_default"])
-                                if col_row["column_default"] is not None
+                                str(_ci_get(col_row, "column_default"))
+                                if _ci_get(col_row, "column_default") is not None
                                 else None
                             ),
-                            is_primary_key=str(col_row["column_key"]).upper() == "PRI",
+                            is_primary_key=str(_ci_get(col_row, "column_key")).upper() == "PRI",
                             is_foreign_key=fk_target is not None,
                             foreign_table=fk_target[0] if fk_target else None,
                             foreign_column=fk_target[1] if fk_target else None,
