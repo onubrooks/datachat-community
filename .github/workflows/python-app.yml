@@ -58,3 +58,98 @@ jobs:
           path: |
             reports/phase1_ci_gate.json
             reports/phase1_ci_gate.md
+
+  smoke-e2e-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: postgresql
+            target_url: postgresql://postgres:postgres@127.0.0.1:5432/datachat_target_pg
+          - engine: mysql
+            target_url: mysql://root:password@127.0.0.1:3306/datachat_target_mysql
+          - engine: clickhouse
+            target_url: clickhouse://default:@127.0.0.1:8123/datachat_target_ch
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -ppassword"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.4
+        ports:
+          - 8123:8123
+          - 9000:9000
+
+    env:
+      SMOKE_ENGINE: ${{ matrix.engine }}
+      SMOKE_TARGET_DATABASE_URL: ${{ matrix.target_url }}
+      SYSTEM_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/datachat_system
+      DATABASE_CREDENTIALS_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      LLM_DEFAULT_PROVIDER: local
+      LLM_REQUIRE_PROVIDER_KEYS_ON_STARTUP: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install --group dev
+
+      - name: Wait for service ports
+        run: |
+          python - <<'PY'
+          import socket
+          import time
+
+          ports = [5432, 3306, 8123]
+          for port in ports:
+              connected = False
+              for _ in range(90):
+                  sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                  sock.settimeout(1.0)
+                  try:
+                      sock.connect(("127.0.0.1", port))
+                      connected = True
+                      break
+                  except OSError:
+                      time.sleep(1)
+                  finally:
+                      sock.close()
+              if not connected:
+                  raise SystemExit(f"Port {port} did not become ready in time")
+          print("Service ports are reachable.")
+          PY
+
+      - name: Run smoke E2E integration
+        run: |
+          pytest tests/integration/test_smoke_e2e.py --run-integration -m integration
