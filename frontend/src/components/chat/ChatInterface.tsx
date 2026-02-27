@@ -1627,6 +1627,21 @@ export function ChatInterface() {
     setTrainModalOpen(true);
   }, [selectedSchemaTable]);
 
+  const closeTrainModal = useCallback(
+    (options?: { restoreFocus?: boolean; force?: boolean }) => {
+      if (trainSubmitting && !options?.force) {
+        return;
+      }
+      setTrainModalOpen(false);
+      setTrainCreateOnly(false);
+      setTrainError(null);
+      if (options?.restoreFocus !== false) {
+        restoreInputFocus("nl");
+      }
+    },
+    [restoreInputFocus, trainSubmitting]
+  );
+
   const refreshMetadataExplorer = useCallback(async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["metadata-managed"] }),
@@ -1847,8 +1862,7 @@ export function ChatInterface() {
           ? `${isUpdateMode ? "Datapoint updated" : "Datapoint created"}, but sync is still catching up.`
           : `${isUpdateMode ? "Datapoint updated" : "Datapoint created"} and indexed. Re-running your question...`
       );
-      setTrainModalOpen(false);
-      setTrainCreateOnly(false);
+      closeTrainModal({ restoreFocus: false, force: true });
       setTrainMode("create");
       setTrainTargetDatapointId("");
       setComposerMode("nl");
@@ -2063,10 +2077,19 @@ export function ChatInterface() {
     if (!trainModalOpen) {
       return;
     }
+    if (typeof window === "undefined") {
+      return;
+    }
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
     const previousOverflow = document.body.style.overflow;
+    const previousPaddingRight = document.body.style.paddingRight;
     document.body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) {
+      document.body.style.paddingRight = `${scrollbarWidth}px`;
+    }
     return () => {
       document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
     };
   }, [trainModalOpen]);
 
@@ -2086,12 +2109,7 @@ export function ChatInterface() {
       if (event.key === "Escape") {
         if (trainModalOpen) {
           event.preventDefault();
-          if (!trainSubmitting) {
-            setTrainModalOpen(false);
-            setTrainCreateOnly(false);
-            setTrainError(null);
-          }
-          restoreInputFocus();
+          closeTrainModal();
           return;
         }
         if (toolApprovalOpen) {
@@ -2146,7 +2164,7 @@ export function ChatInterface() {
     return () => {
       window.removeEventListener("keydown", handleGlobalShortcuts);
     };
-  }, [restoreInputFocus, shortcutsOpen, toolApprovalOpen, trainModalOpen, trainSubmitting]);
+  }, [closeTrainModal, restoreInputFocus, shortcutsOpen, toolApprovalOpen, trainModalOpen]);
 
   const handleInitialize = async (
     databaseUrl: string,
@@ -2605,11 +2623,7 @@ export function ChatInterface() {
             aria-modal="true"
             aria-label="Train DataChat"
             onClick={() => {
-              if (!trainSubmitting) {
-                setTrainModalOpen(false);
-                setTrainCreateOnly(false);
-                setTrainError(null);
-              }
+              closeTrainModal();
             }}
           >
             <div className="flex min-h-full items-start justify-center py-6">
@@ -2785,14 +2799,7 @@ export function ChatInterface() {
                 <div className="mt-5 flex justify-end gap-2">
                   <Button
                     variant="outline"
-                    onClick={() => {
-                      if (trainSubmitting) {
-                        return;
-                      }
-                      setTrainModalOpen(false);
-                      setTrainCreateOnly(false);
-                      setTrainError(null);
-                    }}
+                    onClick={() => closeTrainModal()}
                     disabled={trainSubmitting}
                   >
                     Cancel
