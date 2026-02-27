@@ -238,6 +238,36 @@ class TestAddDataPoints:
             await store.add_datapoints([])
 
     @pytest.mark.asyncio
+    async def test_add_recovers_with_directory_rotation_when_readonly_persists(
+        self, test_vector_store, sample_schema_datapoint
+    ):
+        """Readonly retries should rotate to a fresh persist directory before failing."""
+        readonly_error = Exception("attempt to write a readonly database")
+        with (
+            patch.object(
+                test_vector_store,
+                "_upsert_datapoint_batches",
+                new=AsyncMock(side_effect=[readonly_error, readonly_error, 1]),
+            ) as upsert_mock,
+            patch.object(
+                test_vector_store,
+                "_recover_from_readonly_error",
+                new=AsyncMock(return_value=True),
+            ) as recover_mock,
+            patch.object(
+                test_vector_store,
+                "_force_rotate_persist_directory",
+                new=AsyncMock(return_value=True),
+            ) as rotate_mock,
+        ):
+            added = await test_vector_store.add_datapoints([sample_schema_datapoint])
+
+        assert added == 1
+        recover_mock.assert_awaited_once()
+        rotate_mock.assert_awaited_once()
+        assert upsert_mock.await_count == 3
+
+    @pytest.mark.asyncio
     async def test_add_datapoint_with_metadata(self, test_vector_store, sample_schema_datapoint):
         """Test that metadata is stored correctly."""
         await test_vector_store.add_datapoints([sample_schema_datapoint])
@@ -437,6 +467,36 @@ class TestSearch:
         ):
             with pytest.raises(VectorStoreError, match="Search failed"):
                 await test_vector_store.search("sales", top_k=3)
+
+    @pytest.mark.asyncio
+    async def test_recover_from_storage_error_rebuilds_without_recursive_add(
+        self, test_vector_store, sample_schema_datapoint
+    ):
+        """Storage recovery should rebuild via direct upsert to avoid recursion loops."""
+        with (
+            patch.object(test_vector_store, "client", None),
+            patch.object(
+                test_vector_store,
+                "_init_client",
+                side_effect=[Exception("broken index"), None],
+            ),
+            patch.object(
+                test_vector_store,
+                "_upsert_datapoint_batches",
+                new=AsyncMock(return_value=1),
+            ) as upsert_mock,
+            patch.object(
+                test_vector_store,
+                "add_datapoints",
+                new=AsyncMock(side_effect=AssertionError("should not recurse")),
+            ),
+            patch("backend.knowledge.datapoints.DataPointLoader") as loader_cls,
+        ):
+            loader_cls.return_value.load_directory.return_value = [sample_schema_datapoint]
+            recovered = await test_vector_store._recover_from_storage_error()
+
+        assert recovered is True
+        upsert_mock.assert_awaited_once()
 
 
 class TestDelete:

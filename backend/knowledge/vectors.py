@@ -8,8 +8,10 @@ Supports semantic search, persistence, and metadata storage.
 import asyncio
 import json
 import logging
+import os
 import re
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +192,16 @@ class VectorStore:
                     try:
                         return await self._upsert_datapoint_batches(unique_datapoints, batch_size)
                     except Exception as retry_error:
+                        if self._is_readonly_error(retry_error):
+                            logger.warning(
+                                "Readonly persisted after recovery; rotating to a fresh "
+                                "persist directory."
+                            )
+                            rotated = await self._force_rotate_persist_directory()
+                            if rotated:
+                                return await self._upsert_datapoint_batches(
+                                    unique_datapoints, batch_size
+                                )
                         logger.error(
                             "Vector add retry failed after readonly recovery: %s", retry_error
                         )
@@ -237,8 +249,22 @@ class VectorStore:
         except Exception:
             return False
 
+    def _existing_files_writable(self, directory: Path) -> bool:
+        """Best-effort check that persisted Chroma files are writable."""
+        if not directory.exists():
+            return True
+        try:
+            for path in directory.rglob("*"):
+                if path.is_file() and not os.access(path, os.W_OK):
+                    return False
+        except Exception:
+            return False
+        return True
+
     def _ensure_writable_persist_directory(self) -> None:
-        if self._probe_directory_writable(self.persist_directory):
+        if self._probe_directory_writable(self.persist_directory) and self._existing_files_writable(
+            self.persist_directory
+        ):
             return
 
         logger.warning(
@@ -263,6 +289,19 @@ class VectorStore:
         raise VectorStoreError(
             f"Failed to find writable vector persist directory. Current path: {self.persist_directory}"
         )
+
+    def _allocate_recovery_directory(self) -> Path:
+        """Create a fresh writable directory to replace a poisoned readonly store."""
+        candidates = [
+            Path.home() / ".datachat" / "chroma_recovery",
+            Path(tempfile.gettempdir()) / "datachat_chroma_recovery",
+        ]
+        for base in candidates:
+            for _ in range(5):
+                candidate = base / f"{self.collection_name}_{uuid.uuid4().hex[:12]}"
+                if self._probe_directory_writable(candidate):
+                    return candidate
+        raise VectorStoreError("Failed to allocate writable vector recovery directory.")
 
     def _truncate_document(self, text: str, datapoint_id: str) -> str:
         normalized = re.sub(r"\s+", " ", text).strip()
@@ -525,9 +564,26 @@ class VectorStore:
     async def _recover_from_readonly_error(self) -> bool:
         try:
             await asyncio.to_thread(self._ensure_writable_persist_directory)
-            return await self._recover_from_storage_error()
+            if await self._recover_from_storage_error():
+                return True
+            return await self._force_rotate_persist_directory()
         except Exception as recovery_error:
             logger.warning("Readonly recovery failed: %s", recovery_error)
+            return await self._force_rotate_persist_directory()
+
+    async def _force_rotate_persist_directory(self) -> bool:
+        """Switch to a fresh persistence location and rebuild collection."""
+        try:
+            next_dir = await asyncio.to_thread(self._allocate_recovery_directory)
+            logger.warning(
+                "Switching vector persistence from '%s' to fresh recovery dir '%s'",
+                self.persist_directory,
+                next_dir,
+            )
+            self.persist_directory = next_dir
+            return await self._recover_from_storage_error()
+        except Exception as rotation_error:
+            logger.warning("Vector recovery directory rotation failed: %s", rotation_error)
             return False
 
     async def _recover_from_storage_error(self) -> bool:
@@ -567,7 +623,8 @@ class VectorStore:
             loader = DataPointLoader()
             datapoints = loader.load_directory(datapoints_root, recursive=True, skip_errors=True)
             if datapoints:
-                await self.add_datapoints(datapoints)
+                unique_datapoints = list({dp.datapoint_id: dp for dp in datapoints}.values())
+                await self._upsert_datapoint_batches(unique_datapoints, batch_size=100)
                 logger.info(
                     "Rebuilt vector index from local datapoint files (%s).", len(datapoints)
                 )
