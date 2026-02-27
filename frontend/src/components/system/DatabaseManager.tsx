@@ -20,6 +20,9 @@ import {
 
 const api = new DataChatAPI();
 const ENV_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada";
+const CHAT_SESSION_STORAGE_KEY = "datachat.chat.session.v1";
+const CHAT_HISTORY_STORAGE_KEY = "datachat.conversation.history.v1";
+const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
 
 const isEnvironmentConnection = (connection: DatabaseConnection): boolean =>
   String(connection.connection_id) === ENV_CONNECTION_ID ||
@@ -430,6 +433,8 @@ export function DatabaseManager() {
       queryClient.invalidateQueries({ queryKey: ["profile-tables"] }),
       queryClient.invalidateQueries({ queryKey: ["generation-latest"] }),
       queryClient.invalidateQueries({ queryKey: ["generation-job"] }),
+      queryClient.invalidateQueries({ queryKey: ["chat-bootstrap"] }),
+      queryClient.invalidateQueries({ queryKey: ["ui-conversations"] }),
     ]);
   }, [queryClient]);
 
@@ -905,6 +910,13 @@ export function DatabaseManager() {
     setError(null);
     try {
       await api.systemReset();
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(CHAT_SESSION_STORAGE_KEY);
+        window.localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
+        window.localStorage.removeItem(ACTIVE_DATABASE_STORAGE_KEY);
+        window.dispatchEvent(new CustomEvent("datachat:system-reset"));
+      }
+      queryClient.setQueryData(["ui-conversations"], []);
       setSelectedConnectionId(null);
       await invalidateManagerQueries();
     } catch (err) {

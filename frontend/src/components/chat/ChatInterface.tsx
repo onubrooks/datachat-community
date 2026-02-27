@@ -62,7 +62,9 @@ import { decodeShareToken } from "@/lib/share";
 import { formatWaitingChipLabel } from "./loadingUx";
 
 const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
+const CHAT_SESSION_STORAGE_KEY = "datachat.chat.session.v1";
 const CONVERSATION_HISTORY_STORAGE_KEY = "datachat.conversation.history.v1";
+const SYSTEM_RESET_EVENT = "datachat:system-reset";
 const ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada";
 const MAX_CONVERSATION_HISTORY = 20;
 const MAX_CONVERSATION_MESSAGES = 50;
@@ -528,6 +530,30 @@ export function ChatInterface() {
     setConversationHistory(items);
   };
 
+  const clearLocalChatSession = useCallback(() => {
+    clearMessages();
+    setConversationHistory([]);
+    setConversationDatabaseId(null);
+    setConversationId(null);
+    setSessionMemory(null, null);
+    setInput("");
+    setSqlDraft("");
+    setComposerMode("nl");
+    setError(null);
+    setErrorCategory(null);
+    setLastFailedQuery(null);
+    setRetryCount(0);
+    setSetupCompleted(false);
+    setSetupNotice(null);
+    setSetupError(null);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(CONVERSATION_HISTORY_STORAGE_KEY);
+      window.localStorage.removeItem(CHAT_SESSION_STORAGE_KEY);
+      window.localStorage.removeItem(ACTIVE_DATABASE_STORAGE_KEY);
+    }
+    queryClient.setQueryData(["ui-conversations"], []);
+  }, [clearMessages, queryClient, setConversationId, setSessionMemory]);
+
   const normalizeConversationPayload = useCallback(
     (payload: ConversationSnapshotPayload): ConversationSnapshot => ({
       frontendSessionId: payload.frontend_session_id,
@@ -822,6 +848,19 @@ export function ChatInterface() {
     mergeConversationSnapshots,
     normalizeConversationPayload,
   ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+    const handleSystemReset = () => {
+      clearLocalChatSession();
+      void queryClient.invalidateQueries({ queryKey: ["chat-bootstrap"] });
+      void queryClient.invalidateQueries({ queryKey: ["ui-conversations"] });
+    };
+    window.addEventListener(SYSTEM_RESET_EVENT, handleSystemReset);
+    return () => window.removeEventListener(SYSTEM_RESET_EVENT, handleSystemReset);
+  }, [clearLocalChatSession, queryClient]);
 
   useEffect(() => {
     if (!bootstrapQuery.data) {
