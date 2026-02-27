@@ -303,7 +303,7 @@ def test_smoke_e2e_onboarding_ask_train_reset(monkeypatch: pytest.MonkeyPatch):
 
     with TestClient(app) as client:
         # 3) Train datapoint API flow (create managed query datapoint + wait for sync terminal).
-        datapoint_id = f"query_smoke_training_{engine}_001"
+        datapoint_id = f"query_smoke_training_{engine}_{int(time.time())}"
         create_payload = {
             "datapoint_id": datapoint_id,
             "type": "Query",
