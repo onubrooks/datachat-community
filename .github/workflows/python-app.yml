@@ -85,6 +85,9 @@ jobs:
           - 3306:3306
       clickhouse:
         image: clickhouse/clickhouse-server:25.4
+        env:
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: ${{ github.run_id }}${{ github.run_attempt }}
         ports:
           - 8123:8123
           - 9000:9000
@@ -92,6 +95,7 @@ jobs:
     env:
       SMOKE_ENGINE: ${{ matrix.engine }}
       MYSQL_ROOT_PASSWORD: ${{ github.run_id }}${{ github.run_attempt }}
+      CLICKHOUSE_PASSWORD: ${{ github.run_id }}${{ github.run_attempt }}
       LLM_DEFAULT_PROVIDER: local
       LLM_REQUIRE_PROVIDER_KEYS_ON_STARTUP: "false"
 
@@ -143,13 +147,16 @@ jobs:
 
           engine = os.environ["SMOKE_ENGINE"].strip().lower()
           mysql_password = os.environ["MYSQL_ROOT_PASSWORD"]
+          clickhouse_password = os.environ["CLICKHOUSE_PASSWORD"]
 
           if engine == "postgresql":
               target_url = "postgresql://postgres@127.0.0.1:5432/datachat_target_pg"
           elif engine == "mysql":
               target_url = f"mysql://root:{mysql_password}@127.0.0.1:3306/datachat_target_mysql"
           elif engine == "clickhouse":
-              target_url = "clickhouse://default:@127.0.0.1:8123/datachat_target_ch"
+              target_url = (
+                  f"clickhouse://default:{clickhouse_password}@127.0.0.1:8123/datachat_target_ch"
+              )
           else:
               raise SystemExit(f"Unsupported SMOKE_ENGINE: {engine}")
 

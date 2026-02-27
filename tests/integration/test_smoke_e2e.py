@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 import time
+import uuid
 from collections.abc import Callable
 from urllib.parse import urlparse
 
@@ -236,6 +238,53 @@ def _poll_sync_until_terminal(client: TestClient, timeout_seconds: float = 30.0)
     return last_payload
 
 
+class _FakeEmbeddingFunction:
+    """Deterministic local embedding stub for smoke tests."""
+
+    def __init__(self, api_key: str | None = None, model_name: str | None = None):
+        self.api_key = api_key
+        self.model_name = model_name
+
+    def __call__(self, input: list[str]) -> list[list[float]]:  # noqa: A002
+        vectors: list[list[float]] = []
+        for text in input:
+            encoded = text.encode("utf-8")
+            seed = sum(encoded) or 1
+            vector = [((seed + i * 31) % 997) / 997 for i in range(32)]
+            vectors.append(vector)
+        return vectors
+
+    def embed_query(self, query: str) -> list[float]:
+        return self([query])[0]
+
+    def name(self) -> str:
+        return "datachat_smoke_fake_embedding"
+
+    def default_space(self) -> str:
+        return "cosine"
+
+    def supported_spaces(self) -> list[str]:
+        return ["cosine", "l2", "ip"]
+
+    def get_config(self) -> dict[str, str]:
+        return {"model_name": self.model_name or "smoke-fake"}
+
+    @classmethod
+    def build_from_config(cls, config: dict[str, str]) -> "_FakeEmbeddingFunction":
+        return cls(model_name=config.get("model_name"))
+
+    @staticmethod
+    def validate_config(config: dict[str, str]) -> None:
+        del config
+
+    @staticmethod
+    def validate_config_update(old_config: dict[str, str], new_config: dict[str, str]) -> None:
+        del old_config, new_config
+
+    def is_legacy(self) -> bool:
+        return False
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 def test_smoke_e2e_onboarding_ask_train_reset(monkeypatch: pytest.MonkeyPatch):
@@ -255,6 +304,17 @@ def test_smoke_e2e_onboarding_ask_train_reset(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DATABASE_CREDENTIALS_KEY", credentials_key)
     monkeypatch.setenv("LLM_DEFAULT_PROVIDER", "local")
     monkeypatch.setenv("LLM_REQUIRE_PROVIDER_KEYS_ON_STARTUP", "false")
+    smoke_run_id = f"{engine}_{uuid.uuid4().hex[:10]}"
+    monkeypatch.setenv("CHROMA_COLLECTION_NAME", f"datachat_smoke_{smoke_run_id}")
+    monkeypatch.setenv(
+        "CHROMA_PERSIST_DIR",
+        os.path.join(tempfile.gettempdir(), f"datachat_chroma_smoke_{smoke_run_id}"),
+    )
+
+    # Keep vector upserts fully offline during smoke tests.
+    import backend.knowledge.vectors as vectors_module
+
+    monkeypatch.setattr(vectors_module, "OpenAIEmbeddingFunction", _FakeEmbeddingFunction)
     clear_settings_cache()
 
     from backend.api.main import app
