@@ -66,36 +66,23 @@ jobs:
       matrix:
         include:
           - engine: postgresql
-            target_url: postgresql://postgres:postgres@127.0.0.1:5432/datachat_target_pg
           - engine: mysql
-            target_url: mysql://root:password@127.0.0.1:3306/datachat_target_mysql
           - engine: clickhouse
-            target_url: clickhouse://default:@127.0.0.1:8123/datachat_target_ch
 
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
       mysql:
         image: mysql:8.4
         env:
-          MYSQL_ROOT_PASSWORD: password
+          MYSQL_ROOT_PASSWORD: ${{ github.run_id }}${{ github.run_attempt }}
         ports:
           - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h localhost -ppassword"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 20
       clickhouse:
         image: clickhouse/clickhouse-server:25.4
         ports:
@@ -104,9 +91,7 @@ jobs:
 
     env:
       SMOKE_ENGINE: ${{ matrix.engine }}
-      SMOKE_TARGET_DATABASE_URL: ${{ matrix.target_url }}
-      SYSTEM_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/datachat_system
-      DATABASE_CREDENTIALS_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      MYSQL_ROOT_PASSWORD: ${{ github.run_id }}${{ github.run_attempt }}
       LLM_DEFAULT_PROVIDER: local
       LLM_REQUIRE_PROVIDER_KEYS_ON_STARTUP: "false"
 
@@ -148,6 +133,33 @@ jobs:
               if not connected:
                   raise SystemExit(f"Port {port} did not become ready in time")
           print("Service ports are reachable.")
+          PY
+
+      - name: Prepare smoke runtime env
+        run: |
+          python - <<'PY'
+          import base64
+          import os
+
+          engine = os.environ["SMOKE_ENGINE"].strip().lower()
+          mysql_password = os.environ["MYSQL_ROOT_PASSWORD"]
+
+          if engine == "postgresql":
+              target_url = "postgresql://postgres@127.0.0.1:5432/datachat_target_pg"
+          elif engine == "mysql":
+              target_url = f"mysql://root:{mysql_password}@127.0.0.1:3306/datachat_target_mysql"
+          elif engine == "clickhouse":
+              target_url = "clickhouse://default:@127.0.0.1:8123/datachat_target_ch"
+          else:
+              raise SystemExit(f"Unsupported SMOKE_ENGINE: {engine}")
+
+          # Fernet-compatible key (urlsafe base64-encoded 32 random bytes).
+          credentials_key = base64.urlsafe_b64encode(os.urandom(32)).decode("utf-8")
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"SMOKE_TARGET_DATABASE_URL={target_url}\n")
+              handle.write("SYSTEM_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/datachat_system\n")
+              handle.write(f"DATABASE_CREDENTIALS_KEY={credentials_key}\n")
           PY
 
       - name: Run smoke E2E integration
