@@ -535,10 +535,20 @@ export function ChatInterface() {
     setConversationHistory([]);
     setTargetDatabaseId(null);
     setConversationDatabaseId(null);
+    setConnections([]);
     setConversationId(null);
     setSessionMemory(null, null);
     setInput("");
     setSqlDraft("");
+    setSchemaTables([]);
+    setSchemaError(null);
+    setSelectedSchemaTable(null);
+    setMetadataSearch("");
+    setIncludeExampleMetadata(false);
+    setSelectedMetadataKey(null);
+    setMetadataDetailCache({});
+    setMetadataDetailLoadingKey(null);
+    setMetadataDetailError(null);
     setComposerMode("nl");
     setError(null);
     setErrorCategory(null);
@@ -553,6 +563,12 @@ export function ChatInterface() {
       window.localStorage.removeItem(ACTIVE_DATABASE_STORAGE_KEY);
     }
     queryClient.setQueryData(["ui-conversations"], []);
+    queryClient.setQueryData(["metadata-managed"], []);
+    queryClient.setQueryData(["metadata-pending", null], []);
+    queryClient.setQueryData(["metadata-approved", null], []);
+    queryClient.removeQueries({ queryKey: ["metadata-pending"] });
+    queryClient.removeQueries({ queryKey: ["metadata-approved"] });
+    queryClient.removeQueries({ queryKey: ["metadata-managed"] });
   }, [clearMessages, queryClient, setConversationId, setSessionMemory]);
 
   const normalizeConversationPayload = useCallback(
@@ -1062,12 +1078,18 @@ export function ChatInterface() {
   }, [schemaSearch, schemaTables]);
 
   const pendingMetadataItems = useMemo(() => {
+    if (!canRunQueries) {
+      return [];
+    }
     const items = (pendingMetadataQuery.data || []).map((item) =>
       normalizeMetadataItem(item as unknown as Record<string, unknown>, "pending")
     );
     return filterMetadataItems(dedupeMetadataItems(items), metadataSearch);
-  }, [metadataSearch, pendingMetadataQuery.data]);
+  }, [canRunQueries, metadataSearch, pendingMetadataQuery.data]);
   const managedMetadataInContextItems = useMemo(() => {
+    if (!canRunQueries) {
+      return [];
+    }
     const items = (managedMetadataQuery.data || [])
       .map((item) => ({
         id: item.datapoint_id,
@@ -1102,7 +1124,7 @@ export function ChatInterface() {
         );
       });
     return dedupeMetadataItems(items);
-  }, [managedMetadataQuery.data, metadataConnectionId]);
+  }, [canRunQueries, managedMetadataQuery.data, metadataConnectionId]);
 
   const managedMetadataIds = useMemo(
     () => new Set(managedMetadataInContextItems.map((item) => item.id)),
@@ -1167,13 +1189,16 @@ export function ChatInterface() {
   );
 
   const approvedMetadataItems = useMemo(() => {
+    if (!canRunQueries) {
+      return [];
+    }
     const items = (approvedMetadataQuery.data || [])
       .map((item) =>
         normalizeMetadataItem(item as unknown as Record<string, unknown>, "approved")
       )
       .filter((item) => !managedMetadataIds.has(item.id));
     return filterMetadataItems(dedupeMetadataItems(items), metadataSearch);
-  }, [approvedMetadataQuery.data, managedMetadataIds, metadataSearch]);
+  }, [approvedMetadataQuery.data, canRunQueries, managedMetadataIds, metadataSearch]);
 
   const allMetadataItems = useMemo(
     () => [...pendingMetadataItems, ...approvedMetadataItems, ...managedMetadataItems],
