@@ -488,7 +488,7 @@ export function ChatInterface() {
   const schemaQuery = useQuery({
     queryKey: ["database-schema", targetDatabaseId],
     queryFn: async () => apiClient.getDatabaseSchema(targetDatabaseId as string),
-    enabled: Boolean(targetDatabaseId),
+    enabled: Boolean(targetDatabaseId) && canRunQueries,
   });
 
   const pendingMetadataQuery = useQuery({
@@ -533,6 +533,7 @@ export function ChatInterface() {
   const clearLocalChatSession = useCallback(() => {
     clearMessages();
     setConversationHistory([]);
+    setTargetDatabaseId(null);
     setConversationDatabaseId(null);
     setConversationId(null);
     setSessionMemory(null, null);
@@ -876,6 +877,9 @@ export function ChatInterface() {
     setConnections(dbs);
 
     setTargetDatabaseId((current) => {
+      if (!status.is_initialized) {
+        return null;
+      }
       if (current && dbs.some((db) => db.connection_id === current)) {
         return current;
       }
