@@ -18,10 +18,11 @@ cp .env.example .env
 
 Choose one database setup path:
 
-- Path A: set `DATABASE_URL` directly in `.env`.
-- Path B: use onboarding wizard (UI or CLI) to add a connection.
+- Path A: set `DATABASE_URL` and one LLM provider key directly in `.env`.
+- Path B: start the app, set LLM provider + API key in **Settings**, then use onboarding wizard (UI or CLI) to add a connection.
 
-Set one LLM provider key in `.env`, then run:
+`SYSTEM_DATABASE_URL` is optional for basic querying, and can be added/saved in **Settings** when you want managed profiling + metadata generation.
+Then run:
 
 ```bash
 docker-compose up
@@ -47,10 +48,12 @@ If this succeeds, continue with the full guide below.
 
 Use this when you want immediate querying with only DB credentials.
 
-Required:
+Required before asking questions:
 
-- `DATABASE_URL`
+- target database URL
 - one LLM key (for example `LLM_OPENAI_API_KEY`)
+
+You can provide both via `.env` or in the **Settings** page.
 
 ### Mode B: Registry + profiling (recommended for teams)
 
@@ -93,7 +96,7 @@ cd ..
 cp .env.example .env
 ```
 
-Set one LLM key.
+Set one LLM key (or add it in Settings after startup).
 
 For Mode A, set `DATABASE_URL` directly:
 
@@ -101,6 +104,12 @@ For Mode A, set `DATABASE_URL` directly:
 DATABASE_URL=postgresql://user:password@host:5432/your_database
 LLM_OPENAI_API_KEY=sk-...
 ```
+
+Settings-first alternative:
+- start backend/frontend
+- open `/settings`
+- set provider/key and target database URL
+- save runtime settings, then ask your first question
 
 For Mode B, set registry env and add DB through wizard:
 
@@ -187,6 +196,12 @@ datachat quickstart \
 ## 7. Optional DataPoints (Quality Boost)
 
 Load existing DataPoints:
+
+UI generation options:
+- **Generate DataPoints** reuses the latest completed profile and only runs metadata generation.
+- **Profile + Generate (tool)** reruns profiling first, then generates metadata from the fresh profile.
+- Prefer **Generate DataPoints** for speed when profile is current.
+- Prefer **Profile + Generate (tool)** after schema changes or during first setup.
 
 ```bash
 datachat dp sync --datapoints-dir ./datapoints

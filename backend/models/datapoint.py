@@ -42,6 +42,15 @@ class ColumnMetadata(BaseModel):
     )
     nullable: bool = Field(..., description="Whether column can contain NULL values")
     default_value: str | None = Field(None, description="Default value if any")
+    sample_values: list[str] = Field(
+        default_factory=list,
+        description="Observed sample values for this column",
+    )
+    distinct_count: int | None = Field(
+        None,
+        ge=0,
+        description="Approximate count of distinct values when profiled",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -50,6 +59,8 @@ class ColumnMetadata(BaseModel):
                 "type": "BIGINT",
                 "business_meaning": "Unique identifier for customer",
                 "nullable": False,
+                "sample_values": ["CUST001", "CUST042"],
+                "distinct_count": 120934,
             }
         }
     )

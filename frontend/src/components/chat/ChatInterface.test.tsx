@@ -161,23 +161,6 @@ describe("ChatInterface target database", () => {
     expect(request.target_database).toBe("db_pg");
   });
 
-  it("sends selected workflow mode in chat requests", async () => {
-    renderWithProviders(<ChatInterface />);
-    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(screen.getByLabelText("Workflow mode"), {
-      target: { value: "finance_variance_v1" },
-    });
-
-    const input = screen.getByPlaceholderText("Ask a question about your data...");
-    fireEvent.change(input, { target: { value: "show liquidity risk signals" } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
-
-    await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
-    const request = mockStreamChat.mock.calls[0][0] as Record<string, unknown>;
-    expect(request.workflow_mode).toBe("finance_variance_v1");
-  });
-
   it("restores input focus after response completes", async () => {
     let handlers:
       | {
@@ -213,6 +196,50 @@ describe("ChatInterface target database", () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(input);
     });
+  });
+
+  it("renders an inline assistant message when setup is required", async () => {
+    let handlers:
+      | {
+          onSystemNotInitialized?: (
+            steps: Array<{ step: string; title: string; description: string; action: string }>,
+            message?: string
+          ) => void;
+        }
+      | undefined;
+
+    mockStreamChat.mockImplementation((_request, callbacks) => {
+      handlers = callbacks;
+    });
+
+    renderWithProviders(<ChatInterface />);
+    await waitFor(() => expect(mockListDatabases).toHaveBeenCalledTimes(1));
+
+    const input = screen.getByPlaceholderText("Ask a question about your data...");
+    fireEvent.change(input, { target: { value: "list all available tables" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(mockStreamChat).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      handlers?.onSystemNotInitialized?.(
+        [
+          {
+            step: "database_connection",
+            title: "Connect a target database",
+            description: "Provide the database you want DataChat to query.",
+            action: "configure_database",
+          },
+        ],
+        "Not initialized yet. Complete onboarding to connect a target database, then ask your first question."
+      );
+    });
+
+    expect(
+      screen.getAllByText(
+        "Not initialized yet. Complete onboarding to connect a target database, then ask your first question."
+      ).length
+    ).toBeGreaterThan(0);
   });
 
   it("preserves sub-answers from websocket completion for multi-question rendering", async () => {

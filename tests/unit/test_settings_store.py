@@ -81,3 +81,52 @@ def test_apply_config_defaults_respects_env_source_when_not_dotenv(tmp_path, mon
     assert os.getenv("DATABASE_URL") == "postgresql://u:p@localhost:5432/from_shell"
     config = _read_json(config_path)
     assert config[settings_store.TARGET_DB_KEY] == "postgresql://u:p@localhost:5432/from_shell"
+
+
+def test_is_placeholder_database_url_detects_sample_values():
+    assert settings_store.is_placeholder_database_url(
+        "postgresql://user:pass@localhost:5432/testdb"
+    )
+    assert settings_store.is_placeholder_database_url("mysql://user:pass@host:3306/database")
+    assert not settings_store.is_placeholder_database_url(
+        "postgresql://real_user:real_pass@localhost:5432/warehouse"
+    )
+
+
+def test_apply_config_defaults_ignores_placeholder_env_and_applies_saved_target(
+    tmp_path, monkeypatch
+):
+    """Saved config should override placeholder env URLs for target/system DB keys."""
+    config_dir = tmp_path / ".datachat"
+    config_path = config_dir / "config.json"
+    dotenv_path = tmp_path / ".env"
+
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                settings_store.TARGET_DB_KEY: "postgresql://cfg:pw@localhost:5432/cfg_db",
+                settings_store.SYSTEM_DB_KEY: "postgresql://cfg:pw@localhost:5432/cfg_system",
+            }
+        ),
+        encoding="utf-8",
+    )
+    dotenv_path.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql://user:pass@localhost:5432/testdb",
+                "SYSTEM_DATABASE_URL=postgresql://user:pass@localhost:5432/testdb",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(settings_store, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(settings_store, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(settings_store, "DOTENV_PATH", dotenv_path)
+    monkeypatch.setenv("DATA_CHAT_ENV_SOURCE", "dotenv")
+
+    settings_store.apply_config_defaults()
+
+    assert os.getenv("DATABASE_URL") == "postgresql://cfg:pw@localhost:5432/cfg_db"
+    assert os.getenv("SYSTEM_DATABASE_URL") == "postgresql://cfg:pw@localhost:5432/cfg_system"

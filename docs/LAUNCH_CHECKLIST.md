@@ -12,9 +12,12 @@ Use this before public announcements.
 ## 5-Minute Onboarding Validation
 
 - [ ] Fresh clone + env setup + startup completes.
+- [ ] LLM provider + API key can be set from Settings on first run.
+- [ ] Optional `SYSTEM_DATABASE_URL` can be added/saved in Settings.
 - [ ] First successful question asked in <= 5 minutes.
 - [ ] UI onboarding wizard flow works: connect DB -> generate metadata -> ask first question.
 - [ ] CLI onboarding wizard flow works: `datachat onboarding wizard`.
+- [ ] Train loop demo works: bad/empty answer -> **Train DataChat** -> save datapoint -> retry with improved result.
 
 ## Reliability Checks
 

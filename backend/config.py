@@ -104,6 +104,13 @@ class LLMSettings(BaseSettings):
         gt=0,
         description="Request timeout in seconds",
     )
+    require_provider_keys_on_startup: bool = Field(
+        default=False,
+        description=(
+            "When true, startup fails if selected providers are missing API keys. "
+            "When false, startup succeeds and keys can be added later via Settings."
+        ),
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="LLM_",
@@ -129,7 +136,7 @@ class LLMSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_provider_keys(self) -> "LLMSettings":
-        """Ensure API key is set for selected providers."""
+        """Validate provider key availability for selected providers."""
         provider_key_map = {
             "openai": self.openai_api_key,
             "anthropic": self.anthropic_api_key,
@@ -143,11 +150,24 @@ class LLMSettings(BaseSettings):
             self.fallback_provider,
         }
 
-        for provider in selected_providers:
-            if provider in provider_key_map and not provider_key_map[provider]:
-                raise ValueError(
-                    f"API key required for {provider} provider. Set LLM_{provider.upper()}_API_KEY"
-                )
+        missing_providers = sorted(
+            provider
+            for provider in selected_providers
+            if provider in provider_key_map and not provider_key_map[provider]
+        )
+
+        if missing_providers and self.require_provider_keys_on_startup:
+            provider = missing_providers[0]
+            raise ValueError(
+                f"API key required for {provider} provider. Set LLM_{provider.upper()}_API_KEY"
+            )
+
+        if missing_providers:
+            logging.getLogger(__name__).warning(
+                "Missing API key(s) for provider(s): %s. "
+                "Startup continues; queries using those providers will fail until keys are set.",
+                ", ".join(missing_providers),
+            )
 
         return self
 

@@ -486,6 +486,55 @@ class ProfilingStore:
             profile_id,
         )
 
+    async def delete_pending_for_connection(self, connection_id: UUID) -> None:
+        """Remove pending datapoints for a connection across all profiles."""
+        self._ensure_pool()
+        await self._pool.execute(
+            """
+            DELETE FROM pending_datapoints AS p
+            USING profiling_profiles AS pr
+            WHERE p.profile_id = pr.profile_id
+              AND p.status = 'pending'
+              AND pr.connection_id = $1
+            """,
+            connection_id,
+        )
+
+    async def dedupe_pending_for_connection(self, connection_id: UUID) -> int:
+        """
+        Deduplicate pending datapoints by datapoint_id within a connection.
+
+        Keeps the newest pending row per datapoint_id and removes older duplicates.
+        Returns number of deleted rows.
+        """
+        self._ensure_pool()
+        rows = await self._pool.fetch(
+            """
+            WITH ranked AS (
+                SELECT
+                    p.pending_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(
+                            NULLIF(p.datapoint->>'datapoint_id', ''),
+                            p.pending_id::text
+                        )
+                        ORDER BY p.created_at DESC, p.pending_id DESC
+                    ) AS rn
+                FROM pending_datapoints AS p
+                JOIN profiling_profiles AS pr ON pr.profile_id = p.profile_id
+                WHERE p.status = 'pending'
+                  AND pr.connection_id = $1
+            )
+            DELETE FROM pending_datapoints AS p
+            USING ranked AS r
+            WHERE p.pending_id = r.pending_id
+              AND r.rn > 1
+            RETURNING p.pending_id
+            """,
+            connection_id,
+        )
+        return len(rows)
+
     @staticmethod
     def _row_to_pending(row: asyncpg.Record) -> PendingDataPoint:
         payload = row["datapoint"]

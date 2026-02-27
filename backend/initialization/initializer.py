@@ -15,6 +15,7 @@ from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
 from backend.knowledge.vectors import VectorStore
 from backend.pipeline.orchestrator import DataChatPipeline
+from backend.settings_store import is_placeholder_database_url
 
 
 @dataclass(frozen=True)
@@ -46,13 +47,37 @@ class SystemInitializer:
 
     async def _check_database(self) -> bool:
         connector = self._app_state.get("connector")
-        if connector is None:
-            return False
+        if connector is not None:
+            try:
+                await connector.connect()
+                return True
+            except ConnectionError:
+                # Fall through to managed/env connection checks.
+                pass
+
+        manager = self._app_state.get("database_manager")
+        if manager is not None:
+            try:
+                default_connection = await manager.get_default_connection()
+                if default_connection is not None:
+                    return True
+                return len(await manager.list_connections()) > 0
+            except Exception:
+                # Registry unavailable; fall through to env/settings fallback.
+                pass
+
         try:
-            await connector.connect()
-        except ConnectionError:
-            return False
-        return True
+            from backend.config import get_settings
+
+            settings = get_settings()
+            if settings.database.url:
+                db_url = str(settings.database.url)
+                if db_url and not is_placeholder_database_url(db_url):
+                    return True
+        except Exception:
+            pass
+
+        return False
 
     async def _check_datapoints(self) -> bool:
         vector_store: VectorStore | None = self._app_state.get("vector_store")

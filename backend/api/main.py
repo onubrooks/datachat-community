@@ -43,6 +43,7 @@ from backend.knowledge.graph import KnowledgeGraph
 from backend.knowledge.retriever import Retriever
 from backend.knowledge.vectors import VectorStore
 from backend.pipeline.orchestrator import DataChatPipeline
+from backend.settings_store import is_placeholder_database_url
 
 logger = logging.getLogger(__name__)
 
@@ -100,16 +101,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         # Initialize database connector
         logger.info("Initializing database connector...")
-        if config.database.url:
+        if config.database.url and not is_placeholder_database_url(str(config.database.url)):
             db_url_str = str(config.database.url)
             connector = create_connector(
                 database_url=db_url_str,
                 pool_size=config.database.pool_size,
             )
-            await connector.connect()
-            app_state["connector"] = connector
+            try:
+                await connector.connect()
+                app_state["connector"] = connector
+            except ConnectorConnectionError as e:
+                logger.warning(
+                    "Target database connection unavailable at startup: %s. "
+                    "API continues in setup mode.",
+                    e,
+                )
+                app_state["connector"] = None
         else:
-            logger.warning("DATABASE_URL not set; target database connector not initialized.")
+            logger.warning(
+                "DATABASE_URL not set (or still using placeholder value); "
+                "target database connector not initialized."
+            )
             app_state["connector"] = None
 
         # Initialize database connection registry

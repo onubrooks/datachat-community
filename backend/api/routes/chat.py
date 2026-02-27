@@ -25,12 +25,14 @@ from backend.connectors.base import (
 )
 from backend.connectors.factory import create_connector
 from backend.initialization.initializer import SystemInitializer
+from backend.knowledge.retriever import Retriever
 from backend.models.api import (
     ChatMetrics,
     ChatRequest,
     ChatResponse,
     DataSource,
 )
+from backend.pipeline.orchestrator import DataChatPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +104,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
 
         initializer = SystemInitializer(app_state)
         status_state = await initializer.status()
-        if not status_state.has_databases:
+        if not status_state.has_databases and not database_url:
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={
@@ -231,7 +233,26 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
 
         pipeline = app_state.get("pipeline")
         if pipeline is None:
-            raise RuntimeError("Pipeline not initialized")
+            if not database_url:
+                raise RuntimeError("Pipeline not initialized")
+            connector = create_connector(
+                database_type=database_type,
+                database_url=database_url,
+                pool_size=settings.database.pool_size,
+            )
+            await connector.connect()
+            retriever = Retriever(
+                vector_store=app_state["vector_store"],
+                knowledge_graph=app_state["knowledge_graph"],
+            )
+            pipeline = DataChatPipeline(
+                retriever=retriever,
+                connector=connector,
+                max_retries=3,
+            )
+            app_state["connector"] = connector
+            app_state["pipeline"] = pipeline
+            logger.info("Initialized pipeline lazily from managed connection.")
 
         # Convert conversation history to pipeline format
         conversation_history = [

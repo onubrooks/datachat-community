@@ -52,8 +52,10 @@ interface MessageProps {
   message: MessageType;
   displayMode?: ResultLayoutMode;
   showAgentTimingBreakdown?: boolean;
+  sourceQuestion?: string | null;
   onClarifyingAnswer?: (question: string) => void;
   onEditSqlDraft?: (sql: string) => void;
+  onTrainDatapoint?: (payload: MessageTrainPayload) => void;
   onSubmitFeedback?: (payload: MessageFeedbackPayload) => Promise<void>;
 }
 
@@ -67,6 +69,13 @@ export interface MessageFeedbackPayload {
   answer?: string | null;
   sql?: string | null;
   sources?: Array<Record<string, unknown>>;
+}
+
+export interface MessageTrainPayload {
+  message_id: string;
+  question: string;
+  sql: string;
+  answer?: string | null;
 }
 
 type TabId = "answer" | "sql" | "table" | "visualization" | "sources" | "timing";
@@ -158,14 +167,6 @@ function renderMarkdownish(text: string): React.ReactNode {
   return <div className="space-y-2">{blocks}</div>;
 }
 
-const normalizeAnswerText = (value: string): string =>
-  value
-    .toLowerCase()
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/[*_`>#]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
 const formatDurationSeconds = (milliseconds: number): string => {
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     return "0s";
@@ -256,8 +257,10 @@ export function Message({
   message,
   displayMode = "stacked",
   showAgentTimingBreakdown = true,
+  sourceQuestion,
   onClarifyingAnswer,
   onEditSqlDraft,
+  onTrainDatapoint,
   onSubmitFeedback,
 }: MessageProps) {
   const isUser = message.role === "user";
@@ -324,7 +327,6 @@ export function Message({
     activeSubAnswer?.visualization_metadata ?? message.visualization_metadata;
   const activeClarifyingQuestions =
     activeSubAnswer?.clarifying_questions || message.clarifying_questions;
-  const workflowArtifacts = message.workflow_artifacts;
 
   useEffect(() => {
     if (subAnswers.length === 0) {
@@ -516,14 +518,6 @@ export function Message({
       (message.action_trace?.length ?? 0) > 0 ||
       (message.loop_shadow_decisions?.length ?? 0) > 0
   );
-  const hasWorkflowArtifacts =
-    !isUser &&
-    Boolean(workflowArtifacts) &&
-    (workflowArtifacts?.metrics.length ||
-      workflowArtifacts?.drivers.length ||
-      workflowArtifacts?.caveats.length ||
-      workflowArtifacts?.sources.length ||
-      workflowArtifacts?.follow_ups.length);
 
   const inferVisualizationType = (): VizHint => {
     const hint = (activeVisualizationHint || "").toLowerCase();
@@ -1465,92 +1459,9 @@ export function Message({
   const showActions =
     !isUser && (Boolean(activeSql) || activeHasTable || Boolean(activeContent?.trim()));
 
-  const renderWorkflowPackage = () => {
-    if (!hasWorkflowArtifacts || !workflowArtifacts) {
-      return null;
-    }
-
-    const summaryText = workflowArtifacts.summary?.trim() || "";
-    const normalizedSummary = normalizeAnswerText(summaryText);
-    const normalizedAnswer = normalizeAnswerText(activeContent || "");
-    const isDuplicateSummary =
-      Boolean(normalizedSummary) &&
-      Boolean(normalizedAnswer) &&
-      (normalizedSummary === normalizedAnswer ||
-        normalizedSummary.includes(normalizedAnswer) ||
-        normalizedAnswer.includes(normalizedSummary));
-    const showSummary = Boolean(summaryText) && !isDuplicateSummary;
-
-    return (
-      <div className="mt-3 rounded-lg border border-border/70 bg-secondary/20 p-3">
-        <div className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground">
-          Finance Brief
-        </div>
-        {showSummary && <p className="text-sm leading-relaxed">{summaryText}</p>}
-
-        {workflowArtifacts.metrics.length > 0 && (
-          <div className="mt-3">
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Key Metrics</div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {workflowArtifacts.metrics.slice(0, 4).map((metric, index) => (
-                <div
-                  key={`metric-${index}-${metric.label}-${metric.value}`}
-                  className="rounded border border-border/60 bg-background/80 px-2 py-1"
-                >
-                  <div className="text-[11px] text-muted-foreground">{metric.label}</div>
-                  <div className="text-xs font-medium">{metric.value}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {workflowArtifacts.drivers.length > 0 && (
-          <div className="mt-3">
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Top Drivers</div>
-            <ul className="space-y-1">
-              {workflowArtifacts.drivers.slice(0, 3).map((driver, index) => (
-                <li key={`driver-${index}-${driver.dimension}-${driver.value}`} className="text-xs">
-                  <span className="font-medium">{driver.dimension}:</span> {driver.value} ({driver.contribution})
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {workflowArtifacts.caveats.length > 0 && (
-          <div className="mt-3">
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Caveats</div>
-            <ul className="space-y-1">
-              {workflowArtifacts.caveats.slice(0, 3).map((item, index) => (
-                <li key={`caveat-${index}-${item}`} className="text-xs text-muted-foreground">
-                  • {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {workflowArtifacts.follow_ups.length > 0 && (
-          <div className="mt-3">
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Suggested Follow-ups</div>
-            <ul className="space-y-1">
-              {workflowArtifacts.follow_ups.slice(0, 3).map((item, index) => (
-                <li key={`follow-up-${index}-${item}`} className="text-xs">
-                  • {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   const renderAnswerOnly = () => (
     <>
       {renderMarkdownish(activeContent)}
-      {renderWorkflowPackage()}
       {renderClarifyingQuestions()}
     </>
   );
@@ -1731,6 +1642,24 @@ export function Message({
                   <Link2 size={12} />
                   Share Link
                 </button>
+                {activeSql && onTrainDatapoint && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 hover:bg-secondary"
+                    onClick={() =>
+                      onTrainDatapoint({
+                        message_id: message.id,
+                        question: (activeSubAnswer?.query || sourceQuestion || "").trim(),
+                        sql: activeSql,
+                        answer: activeContent || null,
+                      })
+                    }
+                    aria-label="Train DataChat from this result"
+                  >
+                    <Lightbulb size={12} />
+                    Train DataChat
+                  </button>
+                )}
                 {!onSubmitFeedback && actionNotice && (
                   <span className="text-muted-foreground" role="status" aria-live="polite">
                     {actionNotice}

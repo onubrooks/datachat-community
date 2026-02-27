@@ -2254,7 +2254,24 @@ class SQLAgent(BaseAgent):
         if not columns:
             return []
         tokens = set(self._tokenize_query(query))
-        tokens.update({"amount", "total", "revenue", "price", "cost", "sales"})
+        tokens.update(
+            {
+                "amount",
+                "total",
+                "revenue",
+                "price",
+                "cost",
+                "sales",
+                "status",
+                "type",
+                "category",
+                "segment",
+                "sentiment",
+                "state",
+                "flag",
+                "risk",
+            }
+        )
         numeric_types = {
             "smallint",
             "integer",
@@ -2265,17 +2282,62 @@ class SQLAgent(BaseAgent):
             "double precision",
             "float",
         }
-        preferred: list[str] = []
-        fallback: list[str] = []
+        categorical_type_markers = {
+            "text",
+            "char",
+            "character varying",
+            "varchar",
+            "enum",
+            "bool",
+            "boolean",
+        }
+
+        preferred_categorical: list[str] = []
+        preferred_numeric: list[str] = []
+        preferred_other: list[str] = []
+        fallback_categorical: list[str] = []
+        fallback_numeric: list[str] = []
+        fallback_other: list[str] = []
+
         for name, dtype in columns:
             dtype_norm = (dtype or "").lower()
-            if dtype_norm and dtype_norm in numeric_types:
-                fallback.append(name)
-                if any(token in name.lower() for token in tokens):
-                    preferred.append(name)
+            name_norm = name.lower()
+            token_match = any(token in name_norm for token in tokens)
 
-        selected = preferred or fallback
-        return selected[:5]
+            is_numeric = dtype_norm in numeric_types
+            is_categorical = any(marker in dtype_norm for marker in categorical_type_markers)
+
+            if is_categorical:
+                fallback_categorical.append(name)
+                if token_match:
+                    preferred_categorical.append(name)
+                continue
+
+            if is_numeric:
+                fallback_numeric.append(name)
+                if token_match:
+                    preferred_numeric.append(name)
+                continue
+
+            fallback_other.append(name)
+            if token_match:
+                preferred_other.append(name)
+
+        selected: list[str] = []
+        for bucket in (
+            preferred_categorical,
+            preferred_numeric,
+            preferred_other,
+            fallback_categorical,
+            fallback_numeric,
+            fallback_other,
+        ):
+            for column_name in bucket:
+                if column_name not in selected:
+                    selected.append(column_name)
+                if len(selected) >= 8:
+                    return selected
+        return selected
 
     async def _fetch_table_row_estimate(
         self, connector: BaseConnector, schema: str, table: str
@@ -2326,7 +2388,64 @@ class SQLAgent(BaseAgent):
                 "n_distinct": row.get("n_distinct"),
                 "common_vals": common_vals,
             }
+
+        # pg_stats can be empty/stale for fresh tables; fall back to direct sampling.
+        columns_missing_examples = [
+            column_name
+            for column_name in columns
+            if not stats.get(column_name, {}).get("common_vals")
+        ]
+        for column_name in columns_missing_examples[:4]:
+            examples = await self._fetch_column_examples_direct(
+                connector=connector,
+                schema=schema,
+                table=table,
+                column=column_name,
+            )
+            if not examples:
+                continue
+            entry = stats.setdefault(column_name, {})
+            entry["common_vals"] = examples
+            if entry.get("n_distinct") is None:
+                entry["n_distinct"] = len(examples)
+
         return stats
+
+    async def _fetch_column_examples_direct(
+        self,
+        *,
+        connector: BaseConnector,
+        schema: str,
+        table: str,
+        column: str,
+    ) -> list[str]:
+        quoted_schema = self._quote_identifier(schema)
+        quoted_table = self._quote_identifier(table)
+        quoted_column = self._quote_identifier(column)
+        query = (
+            f"SELECT {quoted_column} AS value "
+            f"FROM {quoted_schema}.{quoted_table} "
+            f"WHERE {quoted_column} IS NOT NULL "
+            f"GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 5"
+        )
+        try:
+            result = await connector.execute(query)
+        except Exception:
+            return []
+        values: list[str] = []
+        for row in result.rows:
+            value = row.get("value")
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text and text not in values:
+                values.append(text)
+        return values
+
+    @staticmethod
+    def _quote_identifier(value: str) -> str:
+        escaped = value.replace('"', '""')
+        return f'"{escaped}"'
 
     def _build_cached_profile_context(
         self,
@@ -2384,10 +2503,24 @@ class SQLAgent(BaseAgent):
                     data_type = str(column.get("data_type") or "")
                     if not col_name:
                         continue
+                    extras: list[str] = []
+                    distinct_count = column.get("distinct_count")
+                    if isinstance(distinct_count, int) and distinct_count >= 0:
+                        extras.append(f"distinct≈{distinct_count}")
+                    sample_values = [
+                        str(v).strip()
+                        for v in column.get("sample_values", [])[:5]
+                        if str(v).strip()
+                    ]
+                    if sample_values:
+                        extras.append(f"samples=[{', '.join(sample_values)}]")
                     if data_type:
-                        lines.append(f"  - {col_name} ({data_type})")
+                        line = f"  - {col_name} ({data_type})"
                     else:
-                        lines.append(f"  - {col_name}")
+                        line = f"  - {col_name}"
+                    if extras:
+                        line += f": {', '.join(extras)}"
+                    lines.append(line)
         if not lines:
             return ""
         return "\n**Auto-profile cache snapshot:**\n" + "\n".join(lines)
@@ -2683,7 +2816,24 @@ class SQLAgent(BaseAgent):
                             col_name = col.get("name", "unknown")
                             col_type = col.get("type", "unknown")
                             col_meaning = col.get("business_meaning", "")
-                            schema_parts.append(f"  - {col_name} ({col_type}): {col_meaning}")
+                            details: list[str] = []
+                            if col_meaning:
+                                details.append(str(col_meaning))
+
+                            sample_values = self._coerce_string_list(col.get("sample_values", []))
+                            if sample_values:
+                                details.append(f"Sample values: {', '.join(sample_values[:5])}")
+
+                            distinct_count = col.get("distinct_count")
+                            if isinstance(distinct_count, int) and distinct_count >= 0:
+                                details.append(f"Distinct values: ~{distinct_count}")
+
+                            if details:
+                                schema_parts.append(
+                                    f"  - {col_name} ({col_type}): {' | '.join(details)}"
+                                )
+                            else:
+                                schema_parts.append(f"  - {col_name} ({col_type})")
                         elif isinstance(col, str):
                             schema_parts.append(f"  - {col}")
 

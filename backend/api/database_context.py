@@ -11,6 +11,7 @@ from backend.config import get_settings
 from backend.connectors.factory import infer_database_type
 from backend.database.manager import DatabaseConnectionManager
 from backend.models.database import DatabaseConnection
+from backend.settings_store import is_placeholder_database_url
 
 ENV_DATABASE_CONNECTION_ID = UUID("00000000-0000-0000-0000-00000000dada")
 
@@ -22,6 +23,8 @@ def _build_environment_connection(*, is_default: bool = True) -> DatabaseConnect
         return None
 
     database_url = str(settings.database.url)
+    if is_placeholder_database_url(database_url):
+        return None
     try:
         database_type = infer_database_type(database_url)
     except Exception:
@@ -109,4 +112,3 @@ async def resolve_database_type_and_url(
 def environment_connection_id() -> str:
     """Public helper for exposing the virtual environment connection identifier."""
     return str(ENV_DATABASE_CONNECTION_ID)
-

@@ -47,6 +47,20 @@ class TestColumnMetadata:
 
         assert column.default_value == "CURRENT_TIMESTAMP"
 
+    def test_column_with_samples_and_distinct_count(self):
+        """Column metadata can include sample values and distinct count."""
+        column = ColumnMetadata(
+            name="sentiment",
+            type="TEXT",
+            business_meaning="Feedback sentiment bucket",
+            nullable=True,
+            sample_values=["up", "down"],
+            distinct_count=2,
+        )
+
+        assert column.sample_values == ["up", "down"]
+        assert column.distinct_count == 2
+
     def test_empty_column_name_rejected(self):
         """Empty column name is rejected."""
         with pytest.raises(ValidationError, match="at least 1 character"):

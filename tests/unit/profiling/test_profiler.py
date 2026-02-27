@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from pydantic import SecretStr
 
+from backend.connectors.base import ColumnInfo, QueryResult, TableInfo
 from backend.database.manager import DatabaseConnectionManager
 from backend.models.database import DatabaseConnection
 from backend.profiling.profiler import SchemaProfiler
@@ -267,6 +268,22 @@ class TestSchemaProfiler:
         assert "ORDER BY table_schema, table_name AND" not in executed_query
 
     @pytest.mark.asyncio
+    async def test_negative_row_estimate_is_treated_as_unknown(self, manager):
+        profiler = SchemaProfiler(manager)
+        conn = AsyncMock()
+        conn.fetchrow = AsyncMock(return_value={"estimate": -1})
+
+        estimate = await profiler._estimate_row_count(
+            conn,
+            "public",
+            "orders",
+            query_timeout_seconds=2,
+            row_estimate_query="SELECT -1 AS estimate",
+        )
+
+        assert estimate is None
+
+    @pytest.mark.asyncio
     async def test_fetch_tables_with_max_tables_handles_ordered_template(self, manager):
         profiler = SchemaProfiler(manager)
         conn = AsyncMock()
@@ -295,6 +312,75 @@ class TestSchemaProfiler:
         assert "FROM (" in count_query
         assert "ORDER BY table_schema, table_name ORDER BY" not in select_query
         assert "LIMIT $1" in select_query
+
+    @pytest.mark.asyncio
+    async def test_profiles_mysql_schema_with_connector_path(self, manager):
+        manager.get_connection.return_value = DatabaseConnection(
+            connection_id=uuid4(),
+            name="MySQL Warehouse",
+            database_url=SecretStr("mysql://root:password@localhost:3306/warehouse"),
+            database_type="mysql",
+            is_active=True,
+            is_default=True,
+            tags=[],
+            description=None,
+            datapoint_count=0,
+        )
+        profiler = SchemaProfiler(manager)
+
+        connector = AsyncMock()
+        connector.get_schema = AsyncMock(
+            return_value=[
+                TableInfo(
+                    schema="warehouse",
+                    table_name="orders",
+                    columns=[
+                        ColumnInfo(
+                            name="status",
+                            data_type="varchar(32)",
+                            is_nullable=True,
+                            default_value=None,
+                        )
+                    ],
+                    row_count=3,
+                    table_type="BASE TABLE",
+                )
+            ]
+        )
+
+        async def execute(query, params=None, timeout=None):
+            if "AS value" in query:
+                return QueryResult(
+                    rows=[{"value": "completed"}, {"value": "pending"}],
+                    row_count=2,
+                    columns=["value"],
+                    execution_time_ms=1.0,
+                )
+            return QueryResult(
+                rows=[
+                    {
+                        "null_count": 0,
+                        "distinct_count": 2,
+                        "min_value": "completed",
+                        "max_value": "pending",
+                    }
+                ],
+                row_count=1,
+                columns=["null_count", "distinct_count", "min_value", "max_value"],
+                execution_time_ms=1.0,
+            )
+
+        connector.execute = AsyncMock(side_effect=execute)
+
+        with patch("backend.profiling.profiler.create_connector", return_value=connector):
+            profile = await profiler.profile_database(str(uuid4()), sample_size=2)
+
+        assert profile.tables_profiled == 1
+        assert profile.tables_failed == 0
+        assert profile.tables[0].name == "orders"
+        assert profile.tables[0].columns[0].sample_values == ["completed", "pending"]
+        connector.connect.assert_awaited_once()
+        connector.close.assert_awaited_once()
 
 
 def test_templates_cover_popular_warehouses():

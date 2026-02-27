@@ -56,10 +56,10 @@ cp .env.example .env
 
 Then choose one database setup path:
 
-- Path A (quickest): set `DATABASE_URL` directly in `.env`.
-- Path B (wizard): keep registry settings in `.env` and add database via UI/CLI onboarding wizard.
+- Path A (quickest): set `DATABASE_URL` and one LLM provider key directly in `.env`.
+- Path B (wizard): start the app, set LLM provider + API key in **Settings**, then add target DB in the onboarding wizard.
 
-Also set one LLM key in `.env` (OpenAI, Google, or Anthropic provider key).
+`SYSTEM_DATABASE_URL` is optional for basic querying. Add/save it in **Settings** when you want managed connections, profiling, and metadata generation.
 
 Start:
 
@@ -140,6 +140,8 @@ LLM_OPENAI_API_KEY=...
 ```
 
 Use this when you want immediate querying with minimal setup.
+
+You can also set both values in **Settings** after startup.
 
 ### Path B: Wizard-based connection setup
 

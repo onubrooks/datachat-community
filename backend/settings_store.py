@@ -20,6 +20,61 @@ DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 TARGET_DB_KEY = "target_database_url"
 SYSTEM_DB_KEY = "system_database_url"
+DATABASE_CREDENTIALS_KEY = "database_credentials_key"
+LLM_DEFAULT_PROVIDER_KEY = "llm_default_provider"
+LLM_OPENAI_API_KEY = "llm_openai_api_key"
+LLM_ANTHROPIC_API_KEY = "llm_anthropic_api_key"
+LLM_GOOGLE_API_KEY = "llm_google_api_key"
+LLM_OPENAI_MODEL = "llm_openai_model"
+LLM_OPENAI_MODEL_MINI = "llm_openai_model_mini"
+LLM_ANTHROPIC_MODEL = "llm_anthropic_model"
+LLM_ANTHROPIC_MODEL_MINI = "llm_anthropic_model_mini"
+LLM_GOOGLE_MODEL = "llm_google_model"
+LLM_GOOGLE_MODEL_MINI = "llm_google_model_mini"
+LLM_LOCAL_MODEL = "llm_local_model"
+LLM_TEMPERATURE = "llm_temperature"
+
+_CONFIG_TO_ENV = {
+    TARGET_DB_KEY: "DATABASE_URL",
+    SYSTEM_DB_KEY: "SYSTEM_DATABASE_URL",
+    DATABASE_CREDENTIALS_KEY: "DATABASE_CREDENTIALS_KEY",
+    LLM_DEFAULT_PROVIDER_KEY: "LLM_DEFAULT_PROVIDER",
+    LLM_OPENAI_API_KEY: "LLM_OPENAI_API_KEY",
+    LLM_ANTHROPIC_API_KEY: "LLM_ANTHROPIC_API_KEY",
+    LLM_GOOGLE_API_KEY: "LLM_GOOGLE_API_KEY",
+    LLM_OPENAI_MODEL: "LLM_OPENAI_MODEL",
+    LLM_OPENAI_MODEL_MINI: "LLM_OPENAI_MODEL_MINI",
+    LLM_ANTHROPIC_MODEL: "LLM_ANTHROPIC_MODEL",
+    LLM_ANTHROPIC_MODEL_MINI: "LLM_ANTHROPIC_MODEL_MINI",
+    LLM_GOOGLE_MODEL: "LLM_GOOGLE_MODEL",
+    LLM_GOOGLE_MODEL_MINI: "LLM_GOOGLE_MODEL_MINI",
+    LLM_LOCAL_MODEL: "LLM_LOCAL_MODEL",
+    LLM_TEMPERATURE: "LLM_TEMPERATURE",
+}
+
+_DB_CONFIG_KEYS = {TARGET_DB_KEY, SYSTEM_DB_KEY}
+_DB_PLACEHOLDER_URLS = {
+    "postgresql://user:pass@localhost:5432/testdb",
+    "postgresql://user:pass@host:5432/database",
+    "mysql://user:pass@host:3306/database",
+    "clickhouse://user:pass@host:8123/database",
+}
+
+
+def is_placeholder_database_url(value: str | None) -> bool:
+    """Return True when value is a known sample/placeholder database URL."""
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if not normalized:
+        return False
+    if normalized in _DB_PLACEHOLDER_URLS:
+        return True
+    # Common placeholder shape used in setup examples.
+    return (
+        "://user:pass@" in normalized
+        and (normalized.endswith("/testdb") or normalized.endswith("/database"))
+    )
 
 
 def _ensure_dir() -> None:
@@ -43,10 +98,27 @@ def save_config(config: dict[str, Any]) -> None:
 
 
 def set_value(key: str, value: str | None) -> None:
-    if not value:
-        return
     config = load_config()
-    config[key] = value
+    normalized = str(value).strip() if value is not None else ""
+    if key in _DB_CONFIG_KEYS and is_placeholder_database_url(normalized):
+        config.pop(key, None)
+    elif value is None or normalized == "":
+        config.pop(key, None)
+    else:
+        config[key] = value
+    save_config(config)
+
+
+def set_values(values: dict[str, str | None]) -> None:
+    config = load_config()
+    for key, value in values.items():
+        normalized = str(value).strip() if value is not None else ""
+        if key in _DB_CONFIG_KEYS and is_placeholder_database_url(normalized):
+            config.pop(key, None)
+        elif value is None or normalized == "":
+            config.pop(key, None)
+        else:
+            config[key] = value
     save_config(config)
 
 
@@ -65,21 +137,27 @@ def apply_config_defaults() -> None:
 
     config = load_config()
 
-    env_target = os.getenv("DATABASE_URL")
-    env_system = os.getenv("SYSTEM_DATABASE_URL")
-
-    if env_target and config.get(TARGET_DB_KEY) != env_target:
-        config[TARGET_DB_KEY] = env_target
-    if env_system and config.get(SYSTEM_DB_KEY) != env_system:
-        config[SYSTEM_DB_KEY] = env_system
+    for config_key, env_key in _CONFIG_TO_ENV.items():
+        env_value = os.getenv(env_key)
+        if (
+            config_key in _DB_CONFIG_KEYS
+            and env_value
+            and is_placeholder_database_url(env_value)
+        ):
+            continue
+        if env_value and config.get(config_key) != env_value:
+            config[config_key] = env_value
 
     if config:
         save_config(config)
 
-    if not os.getenv("DATABASE_URL") and config.get(TARGET_DB_KEY):
-        os.environ["DATABASE_URL"] = str(config[TARGET_DB_KEY])
-    if not os.getenv("SYSTEM_DATABASE_URL") and config.get(SYSTEM_DB_KEY):
-        os.environ["SYSTEM_DATABASE_URL"] = str(config[SYSTEM_DB_KEY])
+    for config_key, env_key in _CONFIG_TO_ENV.items():
+        env_value = os.getenv(env_key)
+        env_missing_or_placeholder = not env_value or (
+            config_key in _DB_CONFIG_KEYS and is_placeholder_database_url(env_value)
+        )
+        if env_missing_or_placeholder and config.get(config_key):
+            os.environ[env_key] = str(config[config_key])
 
 
 def clear_config() -> None:

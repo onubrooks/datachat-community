@@ -2,6 +2,7 @@
 Unit tests for system initialization endpoints.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -162,3 +163,45 @@ class TestSystemEndpoints:
             json={"status": "started"},
         )
         assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_system_reset_clears_runtime_connector_and_pipeline(
+        self, client, not_initialized_status, tmp_path
+    ):
+        mock_connector = AsyncMock()
+        mock_vector_store = AsyncMock()
+        fake_settings = SimpleNamespace(
+            system_database=SimpleNamespace(url=None),
+            chroma=SimpleNamespace(persist_dir=str(tmp_path / "chroma")),
+        )
+
+        with patch(
+            "backend.api.main.app_state",
+            {
+                "pipeline": object(),
+                "vector_store": mock_vector_store,
+                "knowledge_graph": None,
+                "connector": mock_connector,
+                "database_manager": None,
+                "profiling_store": None,
+                "feedback_store": None,
+                "conversation_store": None,
+                "sync_orchestrator": None,
+                "datapoint_watcher": None,
+            },
+        ):
+            with (
+                patch("backend.api.routes.system.get_settings", return_value=fake_settings),
+                patch("backend.api.routes.system.clear_config"),
+                patch("backend.api.routes.system.apply_config_defaults"),
+                patch(
+                    "backend.api.routes.system.SystemInitializer.status",
+                    new=AsyncMock(return_value=not_initialized_status),
+                ),
+            ):
+                response = client.post("/api/v1/system/reset")
+
+        assert response.status_code == 200
+        assert response.json()["is_initialized"] is False
+        mock_connector.close.assert_awaited_once()
+        mock_vector_store.clear.assert_awaited_once()

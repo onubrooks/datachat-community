@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
@@ -16,9 +17,13 @@ import {
   ProfilingJob,
   SyncStatusResponse,
 } from "@/lib/api";
+import { useChatStore } from "@/lib/stores/chat";
 
 const api = new DataChatAPI();
 const ENV_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada";
+const CHAT_SESSION_STORAGE_KEY = "datachat.chat.session.v1";
+const CHAT_HISTORY_STORAGE_KEY = "datachat.conversation.history.v1";
+const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
 
 const isEnvironmentConnection = (connection: DatabaseConnection): boolean =>
   String(connection.connection_id) === ENV_CONNECTION_ID ||
@@ -39,9 +44,10 @@ const inferDatabaseTypeFromUrl = (value: string): string | null => {
 };
 
 type QuickstartStatus = "done" | "ready" | "blocked";
-type WizardAction = "open_connections" | "profile" | "generate" | "approve" | "sync" | null;
+type WizardAction = "connect" | "profile" | "generate" | "approve" | "sync" | null;
 
 type JobsState = {
+  wizardConnecting: boolean;
   generating: boolean;
   bulkApproving: boolean;
   syncing: boolean;
@@ -120,7 +126,10 @@ const DATAPOINT_EDITOR_TEMPLATE = `{
 }`;
 
 export function DatabaseManager() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const clearChatStoreMessages = useChatStore((state) => state.clearMessages);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncScopeMode, setSyncScopeMode] = useState<"auto" | "global" | "database">("auto");
   const [syncScopeConnectionId, setSyncScopeConnectionId] = useState<string | null>(null);
@@ -128,6 +137,7 @@ export function DatabaseManager() {
   const [pendingEdits, setPendingEdits] = useState<Record<string, string>>({});
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobsState>({
+    wizardConnecting: false,
     generating: false,
     bulkApproving: false,
     syncing: false,
@@ -173,15 +183,20 @@ export function DatabaseManager() {
   const [databaseType, setDatabaseType] = useState("postgresql");
   const [description, setDescription] = useState("");
   const [isDefault, setIsDefault] = useState(false);
+  const [wizardConnectionName, setWizardConnectionName] = useState("Primary Database");
+  const [wizardDatabaseUrl, setWizardDatabaseUrl] = useState("");
+  const [wizardDatabaseType, setWizardDatabaseType] = useState("postgresql");
+  const [wizardIsDefault, setWizardIsDefault] = useState(true);
   const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [editingDatabaseUrl, setEditingDatabaseUrl] = useState("");
   const [editingDatabaseType, setEditingDatabaseType] = useState("postgresql");
   const [editingDescription, setEditingDescription] = useState("");
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
-  const [depth, setDepth] = useState("metrics_basic");
+  const [depth, setDepth] = useState("metrics_full");
   const [activeGenerationProfileId, setActiveGenerationProfileId] = useState<string | null>(null);
-  const [generationFallbackJob, setGenerationFallbackJob] = useState<GenerationJob | null>(null);
+  const [activeGenerationJobId, setActiveGenerationJobId] = useState<string | null>(null);
+  const generationFallbackJobRef = useRef<GenerationJob | null>(null);
   const addConnectionRef = useRef<HTMLDivElement | null>(null);
   const previousGenerationStateRef = useRef<{ jobId: string; status: string } | null>(null);
 
@@ -218,6 +233,24 @@ export function DatabaseManager() {
       noticeTimerRef.current = null;
     }, 5000);
   };
+
+  useEffect(() => {
+    const tabParam = searchParams.get("tab");
+    if (tabParam && DATABASE_TABS.includes(tabParam as DatabaseTab)) {
+      setActiveTab(tabParam as DatabaseTab);
+    }
+
+    const wizardParam = searchParams.get("wizard");
+    if (wizardParam === "1" || wizardParam === "true") {
+      setActiveTab("quickstart");
+      setOnboardingWizardOpen(true);
+
+      const nextParams = new URLSearchParams(searchParams.toString());
+      nextParams.delete("wizard");
+      const nextQuery = nextParams.toString();
+      router.replace(nextQuery ? `/databases?${nextQuery}` : "/databases");
+    }
+  }, [router, searchParams]);
 
   const setJobState = useCallback((job: keyof JobsState, value: boolean) => {
     setJobs((current) => ({ ...current, [job]: value }));
@@ -285,6 +318,7 @@ export function DatabaseManager() {
     selectedConnectionPreview && !isEnvironmentConnection(selectedConnectionPreview)
       ? selectedConnectionPreview.connection_id
       : null;
+  const shouldFetchMetadataLists = Boolean(selectedManagedConnectionId) && !activeGenerationJobId;
 
   const profilingJobQuery = useQuery({
     queryKey: ["profiling-job-latest", selectedManagedConnectionId],
@@ -306,10 +340,24 @@ export function DatabaseManager() {
       api.listPendingDatapoints({
         statusFilter: "pending",
         connectionId: selectedManagedConnectionId,
-      }),
-    enabled: Boolean(selectedManagedConnectionId),
+    }),
+    enabled: shouldFetchMetadataLists,
   });
-  const pending = pendingQuery.data ?? [];
+  const pending = useMemo(() => pendingQuery.data ?? [], [pendingQuery.data]);
+  const pendingVisible = useMemo(() => {
+    const seen = new Set<string>();
+    return pending.filter((item) => {
+      const datapoint = item.datapoint as Record<string, unknown>;
+      const rawId = datapoint?.datapoint_id;
+      const dedupeKey =
+        typeof rawId === "string" && rawId.trim().length > 0 ? rawId : item.pending_id;
+      if (seen.has(dedupeKey)) {
+        return false;
+      }
+      seen.add(dedupeKey);
+      return true;
+    });
+  }, [pending]);
 
   const approvedPendingQuery = useQuery({
     queryKey: ["approved-datapoints", selectedManagedConnectionId],
@@ -318,7 +366,7 @@ export function DatabaseManager() {
         statusFilter: "approved",
         connectionId: selectedManagedConnectionId,
       }),
-    enabled: Boolean(selectedManagedConnectionId),
+    enabled: shouldFetchMetadataLists,
   });
   const approved = useMemo(
     () => mapPendingToSummary(approvedPendingQuery.data ?? []),
@@ -347,13 +395,18 @@ export function DatabaseManager() {
 
   const generationProfileId = activeGenerationProfileId || job?.profile_id || null;
   const generationJobQuery = useQuery({
-    queryKey: ["generation-latest", generationProfileId],
-    queryFn: () => api.getLatestGenerationJob(generationProfileId as string),
-    enabled: Boolean(generationProfileId),
+    queryKey: ["generation-job", activeGenerationJobId, generationProfileId],
+    queryFn: () => {
+      if (activeGenerationJobId) {
+        return api.getGenerationJob(activeGenerationJobId);
+      }
+      return api.getLatestGenerationJob(generationProfileId as string);
+    },
+    enabled: Boolean(activeGenerationJobId || generationProfileId),
     refetchInterval: (query) => {
       const generation = query.state.data as GenerationJob | null | undefined;
       if (!generation) {
-        return generationProfileId ? 3000 : false;
+        return activeGenerationJobId ? 3000 : false;
       }
       if (!isJobInProgress(generation.status)) {
         return false;
@@ -362,7 +415,7 @@ export function DatabaseManager() {
     },
   });
   const generationJob = generationJobQuery.data ?? null;
-  const effectiveGenerationJob = generationJob ?? generationFallbackJob;
+  const effectiveGenerationJob = generationJob ?? generationFallbackJobRef.current;
 
   const isLoading =
     connectionsQuery.isLoading ||
@@ -381,6 +434,9 @@ export function DatabaseManager() {
       queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
       queryClient.invalidateQueries({ queryKey: ["profile-tables"] }),
       queryClient.invalidateQueries({ queryKey: ["generation-latest"] }),
+      queryClient.invalidateQueries({ queryKey: ["generation-job"] }),
+      queryClient.invalidateQueries({ queryKey: ["chat-bootstrap"] }),
+      queryClient.invalidateQueries({ queryKey: ["ui-conversations"] }),
     ]);
   }, [queryClient]);
 
@@ -408,15 +464,42 @@ export function DatabaseManager() {
     if (!generationJob) {
       return;
     }
-    setGenerationFallbackJob(generationJob);
+    const current = generationFallbackJobRef.current;
+    if (!current) {
+      generationFallbackJobRef.current = generationJob;
+    } else {
+      const sameJob = current.job_id === generationJob.job_id;
+      const sameStatus = current.status === generationJob.status;
+      const currentProgress = current.progress;
+      const nextProgress = generationJob.progress;
+      const sameProgress =
+        (!currentProgress && !nextProgress) ||
+        (!!currentProgress &&
+          !!nextProgress &&
+          currentProgress.total_tables === nextProgress.total_tables &&
+          currentProgress.tables_completed === nextProgress.tables_completed &&
+          currentProgress.batch_size === nextProgress.batch_size);
+      const sameError = (current.error || null) === (generationJob.error || null);
+      if (!(sameJob && sameStatus && sameProgress && sameError)) {
+        generationFallbackJobRef.current = generationJob;
+      }
+    }
     if (isJobInProgress(generationJob.status)) {
-      setActiveGenerationProfileId(generationJob.profile_id);
+      setActiveGenerationProfileId((current) =>
+        current === generationJob.profile_id ? current : generationJob.profile_id
+      );
+      setActiveGenerationJobId((current) =>
+        current === generationJob.job_id ? current : generationJob.job_id
+      );
       return;
     }
-    if (activeGenerationProfileId && generationJob.profile_id === activeGenerationProfileId) {
-      setActiveGenerationProfileId(null);
-    }
-  }, [generationJob, activeGenerationProfileId]);
+    setActiveGenerationJobId((current) =>
+      current === generationJob.job_id ? null : current
+    );
+    setActiveGenerationProfileId((current) =>
+      current === generationJob.profile_id ? null : current
+    );
+  }, [generationJob]);
 
   const handleToolProfile = async () => {
     setToolApprovalOpen(true);
@@ -491,7 +574,8 @@ export function DatabaseManager() {
 
   useEffect(() => {
     setActiveGenerationProfileId(null);
-    setGenerationFallbackJob(null);
+    setActiveGenerationJobId(null);
+    generationFallbackJobRef.current = null;
   }, [selectedManagedConnectionId]);
 
   useEffect(() => {
@@ -668,8 +752,21 @@ export function DatabaseManager() {
     }
   };
 
-  const handleGenerate = async (): Promise<boolean> => {
-    if (!job?.profile_id) return false;
+  const handleGenerate = async (profileIdOverride?: unknown): Promise<boolean> => {
+    const normalizedProfileId =
+      typeof profileIdOverride === "string" && profileIdOverride.trim().length > 0
+        ? profileIdOverride
+        : null;
+    const profileId = normalizedProfileId || job?.profile_id || null;
+    if (!profileId) {
+      setError("Run profiling first to generate metadata.");
+      return false;
+    }
+    const tablesToGenerate = selectedTables.length > 0 ? selectedTables : profileTables;
+    if (!tablesToGenerate.length) {
+      setError("No profiled tables available yet. Run profiling, then generate metadata.");
+      return false;
+    }
     setError(null);
     if (effectiveGenerationJob?.status === "completed") {
       const confirmReplace = confirm(
@@ -682,17 +779,19 @@ export function DatabaseManager() {
     setJobState("generating", true);
     try {
       const generation = await api.startDatapointGeneration({
-        profile_id: job.profile_id,
-        tables: selectedTables,
+        profile_id: profileId,
+        tables: tablesToGenerate,
         depth,
         batch_size: 10,
-        max_tables: selectedTables.length || null,
+        max_tables: tablesToGenerate.length,
         max_metrics_per_table: 3,
         replace_existing: true,
       });
-      queryClient.setQueryData(["generation-latest", job.profile_id], generation);
-      setActiveGenerationProfileId(job.profile_id);
-      setGenerationFallbackJob(generation);
+      queryClient.setQueryData(["generation-latest", profileId], generation);
+      queryClient.setQueryData(["generation-job", generation.job_id, profileId], generation);
+      setActiveGenerationProfileId(profileId);
+      setActiveGenerationJobId(generation.job_id);
+      generationFallbackJobRef.current = generation;
       await invalidateManagerQueries();
       return true;
     } catch (err) {
@@ -813,6 +912,14 @@ export function DatabaseManager() {
     setError(null);
     try {
       await api.systemReset();
+      clearChatStoreMessages();
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(CHAT_SESSION_STORAGE_KEY);
+        window.localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
+        window.localStorage.removeItem(ACTIVE_DATABASE_STORAGE_KEY);
+        window.dispatchEvent(new CustomEvent("datachat:system-reset"));
+      }
+      queryClient.setQueryData(["ui-conversations"], []);
       setSelectedConnectionId(null);
       await invalidateManagerQueries();
     } catch (err) {
@@ -944,8 +1051,12 @@ export function DatabaseManager() {
   const generationInProgress = jobs.generating || isJobInProgress(effectiveGenerationJob?.status);
   const syncInProgress = jobs.syncing || isJobInProgress(syncStatus?.status);
   const hasProfileCompleted = Boolean(job?.status === "completed" && job.profile_id);
-  const hasPendingDatapoints = pending.length > 0;
+  const generatedCandidateCount = pendingVisible.length + approved.length;
+  const hasPendingDatapoints = pendingVisible.length > 0;
   const hasApprovedDatapoints = approved.length > 0;
+  const hasGeneratedMetadata = generatedCandidateCount > 0;
+  const generationCompletedWithoutCandidates =
+    effectiveGenerationJob?.status === "completed" && generatedCandidateCount === 0;
   const hasSynced = syncStatus?.status === "completed";
   const onboardingWizardCommand = quickstartConnection
     ? `uv run datachat onboarding wizard --connection-id ${quickstartConnection.connection_id} --metrics-depth metrics_full`
@@ -998,21 +1109,49 @@ export function DatabaseManager() {
   };
 
   const runQuickstartGenerate = async (): Promise<boolean> => {
+    if (quickstartConnection) {
+      setSelectedConnectionId(quickstartConnection.connection_id);
+    }
+    let profileId = job?.profile_id || null;
+    if (quickstartConnection && !profileId) {
+      try {
+        const latestJob = await api.getLatestProfilingJob(quickstartConnection.connection_id);
+        queryClient.setQueryData(
+          ["profiling-job-latest", quickstartConnection.connection_id],
+          latestJob
+        );
+        if (!latestJob || latestJob.status !== "completed" || !latestJob.profile_id) {
+          setError("Profiling must complete successfully before generating metadata.");
+          await emitEntryEvent("generate_datapoints", "failed", {
+            reason: "profiling_not_completed",
+            connection_id: quickstartConnection.connection_id,
+          });
+          return false;
+        }
+        profileId = latestJob.profile_id;
+      } catch {
+        setError("Unable to load latest profiling state for metadata generation.");
+        profileId = null;
+      }
+    }
     await emitEntryEvent("generate_datapoints", "started", {
-      profile_id: job?.profile_id || null,
+      profile_id: profileId,
     });
-    const ok = await handleGenerate();
+    const ok = await handleGenerate(profileId);
     await emitEntryEvent("generate_datapoints", ok ? "completed" : "failed", {
-      profile_id: job?.profile_id || null,
+      profile_id: profileId,
     });
     return ok;
   };
 
   const runQuickstartApprove = async (): Promise<boolean> => {
-    await emitEntryEvent("approve_pending", "started", { pending_count: pending.length });
+    if (quickstartConnection) {
+      setSelectedConnectionId(quickstartConnection.connection_id);
+    }
+    await emitEntryEvent("approve_pending", "started", { pending_count: pendingVisible.length });
     const ok = await handleBulkApprove();
     await emitEntryEvent("approve_pending", ok ? "completed" : "failed", {
-      pending_count: pending.length,
+      pending_count: pendingVisible.length,
     });
     return ok;
   };
@@ -1032,17 +1171,17 @@ export function DatabaseManager() {
 
   const wizardStepDone: Record<"connect" | "profile" | "generate" | "approve" | "sync", boolean> =
     wizardReplayMode
-      ? {
+        ? {
           connect: hasManagedConnection,
           profile: wizardReplayProgress.profile,
-          generate: wizardReplayProgress.generate,
+          generate: wizardReplayProgress.generate || hasGeneratedMetadata,
           approve: wizardReplayProgress.approve,
           sync: wizardReplayProgress.sync,
         }
       : {
           connect: hasManagedConnection,
           profile: hasProfileCompleted,
-          generate: hasPendingDatapoints || hasApprovedDatapoints,
+          generate: hasGeneratedMetadata,
           approve: hasApprovedDatapoints,
           sync: hasSynced,
         };
@@ -1054,10 +1193,10 @@ export function DatabaseManager() {
           key: "connect" as const,
           title: "Step 1: Add a managed connection",
           description:
-            "Create a non-environment database connection first. The wizard will continue from there.",
-          action: "open_connections" as WizardAction,
-          actionLabel: "Open Connections Setup",
-          busy: false,
+            "Enter your target database URL here. We will validate and create the connection in this wizard.",
+          action: "connect" as WizardAction,
+          actionLabel: jobs.wizardConnecting ? "Connecting..." : "Connect Database",
+          busy: jobs.wizardConnecting,
         };
       }
       if (profileInProgress) {
@@ -1159,10 +1298,10 @@ export function DatabaseManager() {
         key: "connect" as const,
         title: "Step 1: Add a managed connection",
         description:
-          "Create a non-environment database connection first. The wizard will continue from there.",
-        action: "open_connections" as WizardAction,
-        actionLabel: "Open Connections Setup",
-        busy: false,
+          "Enter your target database URL here. We will validate and create the connection in this wizard.",
+        action: "connect" as WizardAction,
+        actionLabel: jobs.wizardConnecting ? "Connecting..." : "Connect Database",
+        busy: jobs.wizardConnecting,
       };
     }
 
@@ -1218,12 +1357,13 @@ export function DatabaseManager() {
         busy: false,
       };
     }
-    if (!hasPendingDatapoints && !hasApprovedDatapoints) {
+    if (!hasGeneratedMetadata) {
       return {
         key: "generate" as const,
         title: "Step 3: Generate managed metadata",
-        description:
-          "Create managed schema and business metadata from the latest profile.",
+        description: generationCompletedWithoutCandidates
+          ? "Generation finished without metadata candidates. Verify profiled tables and run generation again."
+          : "Create managed schema and business metadata from the latest profile.",
         action: "generate" as WizardAction,
         actionLabel: "Generate Metadata",
         busy: false,
@@ -1245,7 +1385,9 @@ export function DatabaseManager() {
         key: "sync" as const,
         title: "Step 5: Sync retrieval index",
         description:
-          "Sync vector and graph indexes so new metadata is used in query interpretation and retrieval.",
+          hasApprovedDatapoints
+            ? "Sync vector and graph indexes so approved metadata is used in query interpretation and retrieval."
+            : "No pending drafts remain. Run sync to refresh retrieval state and continue.",
         action: "sync" as WizardAction,
         actionLabel: "Run Sync",
         busy: false,
@@ -1278,18 +1420,58 @@ export function DatabaseManager() {
       sync: false,
     });
     setActiveGenerationProfileId(null);
-    setGenerationFallbackJob(null);
+    generationFallbackJobRef.current = null;
     previousGenerationStateRef.current = null;
     void invalidateManagerQueries();
   };
 
   const handleWizardPrimaryAction = async () => {
     switch (wizardStage.action) {
-      case "open_connections":
-        setOnboardingWizardOpen(false);
-        handleTabChange("connections");
-        addConnectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      case "connect": {
+        const trimmedUrl = wizardDatabaseUrl.trim();
+        if (!trimmedUrl) {
+          setError("Enter a target database URL to continue.");
+          return;
+        }
+        const trimmedName = wizardConnectionName.trim() || "Primary Database";
+        setError(null);
+        setJobState("wizardConnecting", true);
+        try {
+          await emitEntryEvent("connect_database", "started", {
+            source: "wizard",
+            database_type: wizardDatabaseType,
+          });
+          const connection = await api.createDatabase({
+            name: trimmedName,
+            database_url: trimmedUrl,
+            database_type: wizardDatabaseType,
+            tags: ["managed"],
+            description: "Created via onboarding wizard",
+            is_default: wizardIsDefault,
+          });
+          setSelectedConnectionId(connection.connection_id);
+          setWizardConnectionName(connection.name);
+          setWizardDatabaseUrl("");
+          setWizardDatabaseType(connection.database_type);
+          setWizardIsDefault(false);
+          showNotice(`Connected ${connection.name}.`);
+          await invalidateManagerQueries();
+          await emitEntryEvent("connect_database", "completed", {
+            source: "wizard",
+            connection_id: connection.connection_id,
+          });
+        } catch (err) {
+          const message = (err as Error).message;
+          setError(message);
+          await emitEntryEvent("connect_database", "failed", {
+            source: "wizard",
+            error: message,
+          });
+        } finally {
+          setJobState("wizardConnecting", false);
+        }
         return;
+      }
       case "profile":
         if (quickstartConnection) {
           setSelectedConnectionId(quickstartConnection.connection_id);
@@ -1387,10 +1569,12 @@ export function DatabaseManager() {
         ? "Metadata generation is running in the background."
         : hasPendingDatapoints
         ? "Pending DataPoints ready for review."
+        : hasGeneratedMetadata
+        ? "Generation completed. Continue with approval or sync."
         : hasProfileCompleted
           ? "Generate pending DataPoints from the latest profile."
           : "Requires completed profiling first.",
-      status: hasPendingDatapoints ? "done" : hasProfileCompleted ? "ready" : "blocked",
+      status: hasGeneratedMetadata ? "done" : hasProfileCompleted ? "ready" : "blocked",
     },
     {
       key: "approve",
@@ -1586,7 +1770,7 @@ export function DatabaseManager() {
             variant="secondary"
             size="sm"
             onClick={runQuickstartGenerate}
-            disabled={!hasProfileCompleted || hasPendingDatapoints || generationInProgress}
+            disabled={!hasProfileCompleted || generationInProgress}
           >
             3) Generate
           </Button>
@@ -1602,7 +1786,7 @@ export function DatabaseManager() {
             variant="secondary"
             size="sm"
             onClick={runQuickstartSync}
-            disabled={(!hasApprovedDatapoints && !hasPendingDatapoints) || syncInProgress}
+            disabled={!hasGeneratedMetadata || syncInProgress}
           >
             5) Sync
           </Button>
@@ -2054,7 +2238,9 @@ export function DatabaseManager() {
                   </div>
                 )}
                 <Button
-                  onClick={handleGenerate}
+                  onClick={() => {
+                    void handleGenerate();
+                  }}
                   disabled={generationInProgress || !hasSelection}
                 >
                   {generationInProgress ? (
@@ -2315,7 +2501,7 @@ export function DatabaseManager() {
           <Button
             onClick={handleBulkApprove}
             disabled={
-              pending.length === 0 ||
+              pendingVisible.length === 0 ||
               jobs.bulkApproving ||
               !selectedConnection ||
               isEnvironmentConnection(selectedConnection)
@@ -2329,13 +2515,13 @@ export function DatabaseManager() {
             Select a managed connection to review pending profiling DataPoints.
           </p>
         )}
-        {pending.length === 0 && (
+        {pendingVisible.length === 0 && (
           <p className="text-sm text-muted-foreground">
             No pending DataPoints for the selected source.
           </p>
         )}
         <div className="space-y-3">
-          {pending.map((item) => (
+          {pendingVisible.map((item) => (
             <div key={item.pending_id} className="border-b border-border pb-3">
               <div className="text-sm font-medium">
                 {String(item.datapoint.name || item.datapoint.datapoint_id)}
@@ -2449,9 +2635,56 @@ export function DatabaseManager() {
             <div className="mt-4 rounded-md border border-border p-4">
               <div className="text-sm font-medium">{wizardStage.title}</div>
               <p className="mt-1 text-xs text-muted-foreground">{wizardStage.description}</p>
+              {wizardStage.action === "connect" && (
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  <Input
+                    placeholder="Connection name"
+                    value={wizardConnectionName}
+                    onChange={(event) => setWizardConnectionName(event.target.value)}
+                    disabled={wizardStage.busy}
+                  />
+                  <Input
+                    placeholder="postgresql://user:pass@host:5432/database"
+                    value={wizardDatabaseUrl}
+                    onChange={(event) => {
+                      const nextUrl = event.target.value;
+                      setWizardDatabaseUrl(nextUrl);
+                      const inferredType = inferDatabaseTypeFromUrl(nextUrl);
+                      if (inferredType) {
+                        setWizardDatabaseType(inferredType);
+                      }
+                    }}
+                    disabled={wizardStage.busy}
+                  />
+                  <select
+                    className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={wizardDatabaseType}
+                    onChange={(event) => setWizardDatabaseType(event.target.value)}
+                    aria-label="Wizard database type"
+                    disabled={wizardStage.busy}
+                  >
+                    <option value="postgresql">postgresql</option>
+                    <option value="mysql">mysql</option>
+                    <option value="clickhouse">clickhouse</option>
+                  </select>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={wizardIsDefault}
+                      onChange={(event) => setWizardIsDefault(event.target.checked)}
+                      disabled={wizardStage.busy}
+                    />
+                    Set as default connection
+                  </label>
+                </div>
+              )}
               {wizardStage.busy && (
                 <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                  <p>Refresh indicators above update automatically while background jobs run.</p>
+                  {wizardStage.action === "connect" ? (
+                    <p>Validating connection and saving credentials...</p>
+                  ) : (
+                    <p>Refresh indicators above update automatically while background jobs run.</p>
+                  )}
                   {profileInProgress && (
                     <p>
                       Profiling status: {job?.status || "running"}

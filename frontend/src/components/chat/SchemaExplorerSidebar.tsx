@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import {
   ChevronDown,
   ChevronRight,
@@ -9,6 +11,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Table2,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -20,10 +23,18 @@ interface MetadataExplorerItem {
   name: string;
   type: string;
   status: "pending" | "approved" | "managed";
+  connectionId?: string | null;
+  scope?: string | null;
+  description?: string | null;
+  businessPurpose?: string | null;
+  sqlTemplate?: string | null;
+  tableName?: string | null;
+  relatedTables?: string[];
   confidence?: number | null;
   reviewNote?: string | null;
   sourceTier?: string | null;
   sourcePath?: string | null;
+  payload?: Record<string, unknown> | null;
 }
 
 interface SchemaExplorerSidebarProps {
@@ -39,13 +50,22 @@ interface SchemaExplorerSidebarProps {
   pendingMetadataItems: MetadataExplorerItem[];
   approvedMetadataItems: MetadataExplorerItem[];
   managedMetadataItems: MetadataExplorerItem[];
+  selectedMetadataKey: string | null;
+  metadataDetail: Record<string, unknown> | null;
+  metadataDetailLoading: boolean;
+  metadataDetailError: string | null;
+  includeExampleMetadata: boolean;
+  metadataContextNote?: string | null;
   selectedSchemaTable: string | null;
   onToggle: () => void;
   onExplorerModeChange: (mode: "schema" | "metadata") => void;
   onSearchChange: (value: string) => void;
   onMetadataSearchChange: (value: string) => void;
+  onIncludeExampleMetadataChange: (value: boolean) => void;
+  onSelectMetadataItem: (item: MetadataExplorerItem) => void;
   onSelectTable: (fullName: string) => void;
   onUseTable: (fullName: string) => void;
+  onAddDatapoint: () => void;
 }
 
 export function SchemaExplorerSidebar({
@@ -61,14 +81,31 @@ export function SchemaExplorerSidebar({
   pendingMetadataItems,
   approvedMetadataItems,
   managedMetadataItems,
+  selectedMetadataKey,
+  metadataDetail,
+  metadataDetailLoading,
+  metadataDetailError,
+  includeExampleMetadata,
+  metadataContextNote,
   selectedSchemaTable,
   onToggle,
   onExplorerModeChange,
   onSearchChange,
   onMetadataSearchChange,
+  onIncludeExampleMetadataChange,
+  onSelectMetadataItem,
   onSelectTable,
   onUseTable,
+  onAddDatapoint,
 }: SchemaExplorerSidebarProps) {
+  const [metadataDetailOpen, setMetadataDetailOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen || explorerMode !== "metadata") {
+      setMetadataDetailOpen(false);
+    }
+  }, [explorerMode, isOpen]);
+
   const statusBadgeClass = (status: MetadataExplorerItem["status"]) => {
     if (status === "pending") {
       return "bg-amber-100 text-amber-900";
@@ -77,6 +114,12 @@ export function SchemaExplorerSidebar({
       return "bg-emerald-100 text-emerald-900";
     }
     return "bg-blue-100 text-blue-900";
+  };
+
+  const handleOpenMetadataDetails = (item: MetadataExplorerItem) => {
+    void Promise.resolve(onSelectMetadataItem(item)).finally(() =>
+      setMetadataDetailOpen(true)
+    );
   };
 
   const renderMetadataSection = (
@@ -93,43 +136,80 @@ export function SchemaExplorerSidebar({
       ) : (
         <ul className="space-y-2">
           {items.map((item, index) => (
-            <li
-              key={`${item.id}-${item.status}-${index}`}
-              className="rounded border border-border/70 bg-muted/20 p-2"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="truncate text-[11px] font-medium text-foreground">
-                    {item.name}
+            <li key={`${item.id}-${item.status}-${index}`}>
+              {(() => {
+                const itemKey = `${item.status}:${item.id}`;
+                const isSelected = selectedMetadataKey === itemKey;
+                return (
+                  <div
+                    className={`w-full rounded border p-2 text-left transition ${
+                      isSelected
+                        ? "border-primary/40 bg-primary/10"
+                        : "border-border/70 bg-muted/20 hover:bg-muted/40"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelectMetadataItem(item)}
+                      className="w-full text-left"
+                      aria-label={`Inspect metadata item ${item.name}`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-[11px] font-medium text-foreground">
+                            {item.name}
+                          </div>
+                          <div className="truncate text-[10px] text-muted-foreground">
+                            {item.type} · {item.id}
+                          </div>
+                        </div>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${statusBadgeClass(
+                            item.status
+                          )}`}
+                        >
+                          {item.status}
+                        </span>
+                      </div>
+                      <div className="mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+                        {item.description && (
+                          <div className="truncate" title={item.description}>
+                            Description: {item.description}
+                          </div>
+                        )}
+                        {item.tableName && <div>Table: {item.tableName}</div>}
+                        {item.scope && <div>Scope: {item.scope}</div>}
+                        {item.connectionId && <div>Connection: {item.connectionId}</div>}
+                        {typeof item.confidence === "number" && (
+                          <div>Confidence: {item.confidence.toFixed(2)}</div>
+                        )}
+                        {item.sourceTier && <div>Source tier: {item.sourceTier}</div>}
+                        {item.sourcePath && (
+                          <div className="truncate" title={item.sourcePath}>
+                            Source path: {item.sourcePath}
+                          </div>
+                        )}
+                        {item.reviewNote && (
+                          <div className="truncate" title={item.reviewNote}>
+                            Review: {item.reviewNote}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                    <div className="mt-2 flex justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={() => handleOpenMetadataDetails(item)}
+                      >
+                        Show details
+                      </Button>
+                    </div>
                   </div>
-                  <div className="truncate text-[10px] text-muted-foreground">
-                    {item.type} · {item.id}
-                  </div>
-                </div>
-                <span
-                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${statusBadgeClass(
-                    item.status
-                  )}`}
-                >
-                  {item.status}
-                </span>
-              </div>
-              <div className="mt-1 space-y-0.5 text-[10px] text-muted-foreground">
-                {typeof item.confidence === "number" && (
-                  <div>Confidence: {item.confidence.toFixed(2)}</div>
-                )}
-                {item.sourceTier && <div>Source tier: {item.sourceTier}</div>}
-                {item.sourcePath && (
-                  <div className="truncate" title={item.sourcePath}>
-                    Source path: {item.sourcePath}
-                  </div>
-                )}
-                {item.reviewNote && (
-                  <div className="truncate" title={item.reviewNote}>
-                    Review: {item.reviewNote}
-                  </div>
-                )}
-              </div>
+                );
+              })()}
             </li>
           ))}
         </ul>
@@ -288,8 +368,32 @@ export function SchemaExplorerSidebar({
                   className="h-8 text-xs"
                   aria-label="Search generated and managed metadata"
                 />
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={onAddDatapoint}
+                  >
+                    Add Datapoint
+                  </Button>
+                </div>
+                <label className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={includeExampleMetadata}
+                    onChange={(event) => onIncludeExampleMetadataChange(event.target.checked)}
+                  />
+                  Include demo/example metadata
+                </label>
               </div>
               <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+                {metadataContextNote && (
+                  <div className="rounded border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-900">
+                    {metadataContextNote}
+                  </div>
+                )}
                 {metadataLoading && (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -327,6 +431,92 @@ export function SchemaExplorerSidebar({
       ) : (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           {explorerMode === "metadata" ? <FileText size={16} /> : <Database size={16} />}
+        </div>
+      )}
+      {metadataDetailOpen && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setMetadataDetailOpen(false)}
+        >
+          <div
+            className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-border bg-background shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div className="text-sm font-semibold text-foreground">Metadata Detail</div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => setMetadataDetailOpen(false)}
+                aria-label="Close metadata detail modal"
+              >
+                <X size={14} />
+              </Button>
+            </div>
+            <div className="overflow-y-auto p-4 text-sm">
+              {!selectedMetadataKey && (
+                <p className="text-muted-foreground">
+                  Select a metadata item and click Show details.
+                </p>
+              )}
+              {selectedMetadataKey && metadataDetailLoading && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading metadata detail...
+                </div>
+              )}
+              {selectedMetadataKey && !metadataDetailLoading && metadataDetailError && (
+                <div className="rounded border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  {metadataDetailError}
+                </div>
+              )}
+              {selectedMetadataKey &&
+                !metadataDetailLoading &&
+                !metadataDetailError &&
+                metadataDetail && (
+                  <div className="space-y-3 text-sm">
+                    <div>
+                      <span className="font-medium">Name:</span>{" "}
+                      {typeof metadataDetail.name === "string" ? metadataDetail.name : "—"}
+                    </div>
+                    <div>
+                      <span className="font-medium">Type:</span>{" "}
+                      {typeof metadataDetail.type === "string" ? metadataDetail.type : "—"}
+                    </div>
+                    {typeof metadataDetail.description === "string" && (
+                      <div>
+                        <div className="font-medium">Description</div>
+                        <div className="text-muted-foreground">{metadataDetail.description}</div>
+                      </div>
+                    )}
+                    {typeof metadataDetail.business_purpose === "string" && (
+                      <div>
+                        <div className="font-medium">Business Purpose</div>
+                        <div className="text-muted-foreground">
+                          {metadataDetail.business_purpose}
+                        </div>
+                      </div>
+                    )}
+                    {typeof metadataDetail.sql_template === "string" && (
+                      <div>
+                        <div className="font-medium">SQL Template</div>
+                        <pre className="mt-1 max-h-56 overflow-auto rounded border border-border/60 bg-muted/20 p-3 text-xs">
+                          {metadataDetail.sql_template}
+                        </pre>
+                      </div>
+                    )}
+                    <details className="rounded border border-border/60 bg-muted/20 p-3">
+                      <summary className="cursor-pointer text-sm font-medium">Raw JSON</summary>
+                      <pre className="mt-2 max-h-[40vh] overflow-auto text-xs text-muted-foreground">
+                        {JSON.stringify(metadataDetail, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                )}
+            </div>
+          </div>
         </div>
       )}
     </aside>

@@ -59,6 +59,8 @@ class DataPointSummary(BaseModel):
     datapoint_id: str
     type: str
     name: str | None
+    connection_id: str | None = None
+    scope: str | None = None
     source_tier: str | None = None
     source_path: str | None = None
     lifecycle_version: str | None = None
@@ -266,6 +268,8 @@ async def list_datapoints() -> DataPointListResponse:
         source_tier = str(source_tier_raw) if source_tier_raw is not None else "unknown"
         source_path_raw = metadata.get("source_path")
         source_path = str(source_path_raw) if source_path_raw else None
+        connection_id_raw = metadata.get("connection_id")
+        scope_raw = metadata.get("scope")
         lifecycle_version_raw = metadata.get("lifecycle_version")
         lifecycle_reviewer_raw = metadata.get("lifecycle_reviewer")
         lifecycle_changed_by_raw = metadata.get("lifecycle_changed_by")
@@ -275,6 +279,10 @@ async def list_datapoints() -> DataPointListResponse:
             datapoint_id=datapoint_id,
             type=str(metadata.get("type", "Unknown")),
             name=str(metadata["name"]) if metadata.get("name") is not None else None,
+            connection_id=(
+                str(connection_id_raw) if connection_id_raw is not None else None
+            ),
+            scope=str(scope_raw) if scope_raw is not None else None,
             source_tier=source_tier,
             source_path=source_path,
             lifecycle_version=(

@@ -14,6 +14,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Send,
@@ -28,7 +29,11 @@ import {
   Keyboard,
   FileCode2,
 } from "lucide-react";
-import { Message, type MessageFeedbackPayload } from "./Message";
+import {
+  Message,
+  type MessageFeedbackPayload,
+  type MessageTrainPayload,
+} from "./Message";
 import { ConversationHistorySidebar } from "./ConversationHistorySidebar";
 import { SchemaExplorerSidebar } from "./SchemaExplorerSidebar";
 import type { ConversationSnapshot, SerializedMessage } from "./chatTypes";
@@ -57,8 +62,10 @@ import { decodeShareToken } from "@/lib/share";
 import { formatWaitingChipLabel } from "./loadingUx";
 
 const ACTIVE_DATABASE_STORAGE_KEY = "datachat.active_connection_id";
+const CHAT_SESSION_STORAGE_KEY = "datachat.chat.session.v1";
 const CONVERSATION_HISTORY_STORAGE_KEY = "datachat.conversation.history.v1";
-const WORKFLOW_MODE_STORAGE_KEY = "datachat.workflow_mode.v1";
+const SYSTEM_RESET_EVENT = "datachat:system-reset";
+const ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada";
 const MAX_CONVERSATION_HISTORY = 20;
 const MAX_CONVERSATION_MESSAGES = 50;
 
@@ -147,10 +154,33 @@ type MetadataExplorerItem = {
   name: string;
   type: string;
   status: "pending" | "approved" | "managed";
+  connectionId?: string | null;
+  scope?: string | null;
+  description?: string | null;
+  businessPurpose?: string | null;
+  sqlTemplate?: string | null;
+  tableName?: string | null;
+  relatedTables?: string[];
   confidence?: number | null;
   reviewNote?: string | null;
   sourceTier?: string | null;
   sourcePath?: string | null;
+  lifecycleVersion?: string | null;
+  lifecycleChangedAt?: string | null;
+  lifecycleChangedBy?: string | null;
+  payload?: Record<string, unknown> | null;
+};
+
+type TrainMode = "create" | "update";
+
+type TrainManagedQueryOption = {
+  datapointId: string;
+  name: string;
+  connectionId: string | null;
+  scope: string | null;
+  lifecycleVersion: string | null;
+  lifecycleChangedAt: string | null;
+  lifecycleChangedBy: string | null;
 };
 
 const normalizeMetadataItem = (
@@ -164,6 +194,25 @@ const normalizeMetadataItem = (
     name: String(datapoint.name || datapoint.datapoint_id || item.pending_id || "Unnamed DataPoint"),
     type: String(datapoint.type || "Unknown"),
     status,
+    description:
+      typeof datapoint.description === "string" ? datapoint.description : null,
+    businessPurpose:
+      typeof datapoint.business_purpose === "string"
+        ? datapoint.business_purpose
+        : null,
+    sqlTemplate:
+      typeof datapoint.sql_template === "string" ? datapoint.sql_template : null,
+    tableName:
+      typeof datapoint.table_name === "string"
+        ? datapoint.table_name
+        : typeof datapoint.table === "string"
+          ? datapoint.table
+          : null,
+    relatedTables: Array.isArray(datapoint.related_tables)
+      ? datapoint.related_tables
+          .filter((entry): entry is string => typeof entry === "string")
+          .slice(0, 10)
+      : [],
     confidence:
       typeof item.confidence === "number"
         ? item.confidence
@@ -174,6 +223,13 @@ const normalizeMetadataItem = (
       typeof metadata.source_tier === "string" ? metadata.source_tier : null,
     sourcePath:
       typeof metadata.source_path === "string" ? metadata.source_path : null,
+    lifecycleVersion:
+      typeof metadata.lifecycle_version === "string" ? metadata.lifecycle_version : null,
+    lifecycleChangedAt:
+      typeof metadata.lifecycle_changed_at === "string" ? metadata.lifecycle_changed_at : null,
+    lifecycleChangedBy:
+      typeof metadata.lifecycle_changed_by === "string" ? metadata.lifecycle_changed_by : null,
+    payload: datapoint,
   };
 };
 
@@ -186,11 +242,69 @@ const filterMetadataItems = (
     return items;
   }
   return items.filter((item) => {
-    const haystack = `${item.id} ${item.name} ${item.type} ${item.sourceTier || ""} ${
-      item.sourcePath || ""
-    }`.toLowerCase();
+    const haystack = `${item.id} ${item.name} ${item.type} ${item.description || ""} ${
+      item.businessPurpose || ""
+    } ${item.tableName || ""} ${(item.relatedTables || []).join(" ")} ${
+      item.connectionId || ""
+    } ${item.scope || ""} ${
+      item.sourceTier || ""
+    } ${item.sourcePath || ""}`.toLowerCase();
     return haystack.includes(search);
   });
+};
+
+const dedupeMetadataItems = (items: MetadataExplorerItem[]): MetadataExplorerItem[] => {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) {
+      return false;
+    }
+    seen.add(item.id);
+    return true;
+  });
+};
+
+const isEnvironmentConnection = (connection: DatabaseConnection): boolean =>
+  String(connection.connection_id) === ENV_DATABASE_CONNECTION_ID ||
+  (connection.tags || []).includes("env");
+
+const slugifyDatapointToken = (value: string): string => {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+  return slug || "custom_query";
+};
+
+const extractRelatedTablesFromSql = (sql: string): string[] => {
+  const matches = sql.match(/\b(?:from|join)\s+([a-zA-Z0-9_."]+)/gi) || [];
+  const cleaned = matches
+    .map((entry) =>
+      entry
+        .replace(/\b(?:from|join)\s+/i, "")
+        .replace(/["`]/g, "")
+        .trim()
+        .toLowerCase()
+    )
+    .filter(Boolean);
+  return Array.from(new Set(cleaned));
+};
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+
+const formatTrainHistoryTimestamp = (value: string | null): string => {
+  if (!value) {
+    return "Unknown";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
 };
 
 export function ChatInterface() {
@@ -235,7 +349,6 @@ export function ChatInterface() {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [targetDatabaseId, setTargetDatabaseId] = useState<string | null>(null);
   const [conversationDatabaseId, setConversationDatabaseId] = useState<string | null>(null);
-  const [workflowMode, setWorkflowMode] = useState<"auto" | "finance_variance_v1">("auto");
   const [resultLayoutMode, setResultLayoutMode] =
     useState<ResultLayoutMode>("stacked");
   const [showAgentTimingBreakdown, setShowAgentTimingBreakdown] = useState(true);
@@ -258,11 +371,34 @@ export function ChatInterface() {
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaSearch, setSchemaSearch] = useState("");
   const [metadataSearch, setMetadataSearch] = useState("");
+  const [includeExampleMetadata, setIncludeExampleMetadata] = useState(false);
   const [explorerMode, setExplorerMode] = useState<"schema" | "metadata">("schema");
+  const [selectedMetadataKey, setSelectedMetadataKey] = useState<string | null>(null);
+  const [metadataDetailCache, setMetadataDetailCache] = useState<
+    Record<string, Record<string, unknown>>
+  >({});
+  const [metadataDetailLoadingKey, setMetadataDetailLoadingKey] = useState<string | null>(null);
+  const [metadataDetailError, setMetadataDetailError] = useState<string | null>(null);
   const [selectedSchemaTable, setSelectedSchemaTable] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState("");
   const [composerMode, setComposerMode] = useState<"nl" | "sql">("nl");
   const [sqlDraft, setSqlDraft] = useState("");
+  const [trainModalOpen, setTrainModalOpen] = useState(false);
+  const [trainCreateOnly, setTrainCreateOnly] = useState(false);
+  const [trainMode, setTrainMode] = useState<TrainMode>("create");
+  const [trainTargetDatapointId, setTrainTargetDatapointId] = useState("");
+  const [trainHistorySearch, setTrainHistorySearch] = useState("");
+  const [trainQuestion, setTrainQuestion] = useState("");
+  const [trainSql, setTrainSql] = useState("");
+  const [trainName, setTrainName] = useState("");
+  const [trainNotes, setTrainNotes] = useState("");
+  const [trainRelatedTables, setTrainRelatedTables] = useState("");
+  const [trainSubmitting, setTrainSubmitting] = useState(false);
+  const [trainLoadingExisting, setTrainLoadingExisting] = useState(false);
+  const [trainSyncing, setTrainSyncing] = useState(false);
+  const [trainError, setTrainError] = useState<string | null>(null);
+  const [trainNotice, setTrainNotice] = useState<string | null>(null);
+  const [isClientMounted, setIsClientMounted] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const sqlEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -289,6 +425,11 @@ export function ChatInterface() {
     composerModeRef.current = composerMode;
   }, [composerMode]);
 
+  useEffect(() => {
+    setIsClientMounted(true);
+    return () => setIsClientMounted(false);
+  }, []);
+
   const bootstrapQuery = useQuery({
     queryKey: ["chat-bootstrap"],
     queryFn: async () => {
@@ -298,28 +439,76 @@ export function ChatInterface() {
     },
   });
 
+  const hasManagedConnection = connections.some(
+    (connection) => !(connection.tags || []).includes("env")
+  );
+  const canRunQueries = isInitialized || hasManagedConnection;
+
+  const metadataConnectionId = useMemo(() => {
+    if (!connections.length) {
+      return null;
+    }
+    const selected = connections.find((connection) => connection.connection_id === targetDatabaseId);
+    if (selected && !isEnvironmentConnection(selected)) {
+      return selected.connection_id;
+    }
+    const managedDefault = connections.find(
+      (connection) => !isEnvironmentConnection(connection) && connection.is_default
+    );
+    if (managedDefault) {
+      return managedDefault.connection_id;
+    }
+    const firstManaged = connections.find((connection) => !isEnvironmentConnection(connection));
+    return firstManaged?.connection_id ?? null;
+  }, [connections, targetDatabaseId]);
+
+  const metadataContextNote = useMemo(() => {
+    if (!targetDatabaseId) {
+      return null;
+    }
+    if (!metadataConnectionId) {
+      return "No managed metadata available yet. Run the onboarding wizard to profile, generate, and approve metadata for this source.";
+    }
+    if (targetDatabaseId === metadataConnectionId) {
+      return null;
+    }
+    const selected = connections.find((connection) => connection.connection_id === targetDatabaseId);
+    const metadataConnection = connections.find(
+      (connection) => connection.connection_id === metadataConnectionId
+    );
+    if (!selected || !metadataConnection) {
+      return null;
+    }
+    if (!isEnvironmentConnection(selected)) {
+      return null;
+    }
+    return `Showing metadata for managed connection "${metadataConnection.name}" while target "${selected.name}" is environment-only.`;
+  }, [connections, metadataConnectionId, targetDatabaseId]);
+
   const schemaQuery = useQuery({
     queryKey: ["database-schema", targetDatabaseId],
     queryFn: async () => apiClient.getDatabaseSchema(targetDatabaseId as string),
-    enabled: Boolean(targetDatabaseId),
+    enabled: Boolean(targetDatabaseId) && canRunQueries,
   });
 
   const pendingMetadataQuery = useQuery({
-    queryKey: ["metadata-pending", targetDatabaseId],
+    queryKey: ["metadata-pending", metadataConnectionId],
     queryFn: async () =>
       apiClient.listPendingDatapoints({
         statusFilter: "pending",
-        connectionId: targetDatabaseId,
+        connectionId: metadataConnectionId,
       }),
+    enabled: Boolean(metadataConnectionId),
   });
 
   const approvedMetadataQuery = useQuery({
-    queryKey: ["metadata-approved", targetDatabaseId],
+    queryKey: ["metadata-approved", metadataConnectionId],
     queryFn: async () =>
       apiClient.listPendingDatapoints({
         statusFilter: "approved",
-        connectionId: targetDatabaseId,
+        connectionId: metadataConnectionId,
       }),
+    enabled: Boolean(metadataConnectionId),
   });
 
   const managedMetadataQuery = useQuery({
@@ -340,6 +529,47 @@ export function ChatInterface() {
     );
     setConversationHistory(items);
   };
+
+  const clearLocalChatSession = useCallback(() => {
+    clearMessages();
+    setConversationHistory([]);
+    setTargetDatabaseId(null);
+    setConversationDatabaseId(null);
+    setConnections([]);
+    setConversationId(null);
+    setSessionMemory(null, null);
+    setInput("");
+    setSqlDraft("");
+    setSchemaTables([]);
+    setSchemaError(null);
+    setSelectedSchemaTable(null);
+    setMetadataSearch("");
+    setIncludeExampleMetadata(false);
+    setSelectedMetadataKey(null);
+    setMetadataDetailCache({});
+    setMetadataDetailLoadingKey(null);
+    setMetadataDetailError(null);
+    setComposerMode("nl");
+    setError(null);
+    setErrorCategory(null);
+    setLastFailedQuery(null);
+    setRetryCount(0);
+    setSetupCompleted(false);
+    setSetupNotice(null);
+    setSetupError(null);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(CONVERSATION_HISTORY_STORAGE_KEY);
+      window.localStorage.removeItem(CHAT_SESSION_STORAGE_KEY);
+      window.localStorage.removeItem(ACTIVE_DATABASE_STORAGE_KEY);
+    }
+    queryClient.setQueryData(["ui-conversations"], []);
+    queryClient.setQueryData(["metadata-managed"], []);
+    queryClient.setQueryData(["metadata-pending", null], []);
+    queryClient.setQueryData(["metadata-approved", null], []);
+    queryClient.removeQueries({ queryKey: ["metadata-pending"] });
+    queryClient.removeQueries({ queryKey: ["metadata-approved"] });
+    queryClient.removeQueries({ queryKey: ["metadata-managed"] });
+  }, [clearMessages, queryClient, setConversationId, setSessionMemory]);
 
   const normalizeConversationPayload = useCallback(
     (payload: ConversationSnapshotPayload): ConversationSnapshot => ({
@@ -592,17 +822,6 @@ export function ChatInterface() {
   }, [messages]);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(WORKFLOW_MODE_STORAGE_KEY);
-    if (saved === "finance_variance_v1" || saved === "auto") {
-      setWorkflowMode(saved);
-    }
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem(WORKFLOW_MODE_STORAGE_KEY, workflowMode);
-  }, [workflowMode]);
-
-  useEffect(() => {
     const raw = window.localStorage.getItem(CONVERSATION_HISTORY_STORAGE_KEY);
     if (!raw) {
       setConversationHistory([]);
@@ -648,6 +867,19 @@ export function ChatInterface() {
   ]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+    const handleSystemReset = () => {
+      clearLocalChatSession();
+      void queryClient.invalidateQueries({ queryKey: ["chat-bootstrap"] });
+      void queryClient.invalidateQueries({ queryKey: ["ui-conversations"] });
+    };
+    window.addEventListener(SYSTEM_RESET_EVENT, handleSystemReset);
+    return () => window.removeEventListener(SYSTEM_RESET_EVENT, handleSystemReset);
+  }, [clearLocalChatSession, queryClient]);
+
+  useEffect(() => {
     if (!bootstrapQuery.data) {
       if (bootstrapQuery.isError) {
         setIsBackendReachable(false);
@@ -661,6 +893,9 @@ export function ChatInterface() {
     setConnections(dbs);
 
     setTargetDatabaseId((current) => {
+      if (!status.is_initialized) {
+        return null;
+      }
       if (current && dbs.some((db) => db.connection_id === current)) {
         return current;
       }
@@ -842,43 +1077,152 @@ export function ChatInterface() {
     });
   }, [schemaSearch, schemaTables]);
 
-  const pendingMetadataItems = useMemo(
-    () =>
-      filterMetadataItems(
-        (pendingMetadataQuery.data || []).map((item) =>
-          normalizeMetadataItem(item as unknown as Record<string, unknown>, "pending")
-        ),
-        metadataSearch
-      ),
-    [metadataSearch, pendingMetadataQuery.data]
+  const pendingMetadataItems = useMemo(() => {
+    if (!canRunQueries) {
+      return [];
+    }
+    const items = (pendingMetadataQuery.data || []).map((item) =>
+      normalizeMetadataItem(item as unknown as Record<string, unknown>, "pending")
+    );
+    return filterMetadataItems(dedupeMetadataItems(items), metadataSearch);
+  }, [canRunQueries, metadataSearch, pendingMetadataQuery.data]);
+  const managedMetadataInContextItems = useMemo(() => {
+    if (!canRunQueries) {
+      return [];
+    }
+    const items = (managedMetadataQuery.data || [])
+      .map((item) => ({
+        id: item.datapoint_id,
+        name: item.name || item.datapoint_id,
+        type: item.type || "Unknown",
+        status: "managed" as const,
+        connectionId: item.connection_id || null,
+        scope: item.scope || null,
+        description: null,
+        businessPurpose: null,
+        sqlTemplate: null,
+        tableName: null,
+        relatedTables: [],
+        sourceTier: item.source_tier || null,
+        sourcePath: item.source_path || null,
+        lifecycleVersion: item.lifecycle_version || null,
+        lifecycleChangedAt: item.lifecycle_changed_at || null,
+        lifecycleChangedBy: item.lifecycle_changed_by || null,
+        payload: null,
+      }))
+      .filter((item) => {
+        if (!metadataConnectionId) {
+          return true;
+        }
+        if (!item.connectionId && !item.scope) {
+          return true;
+        }
+        return (
+          item.connectionId === metadataConnectionId ||
+          item.scope === "global" ||
+          item.scope === "shared"
+        );
+      });
+    return dedupeMetadataItems(items);
+  }, [canRunQueries, managedMetadataQuery.data, metadataConnectionId]);
+
+  const managedMetadataIds = useMemo(
+    () => new Set(managedMetadataInContextItems.map((item) => item.id)),
+    [managedMetadataInContextItems]
   );
 
-  const approvedMetadataItems = useMemo(
+  const managedMetadataItems = useMemo(() => {
+    const items = managedMetadataInContextItems.filter((item) => {
+      if (includeExampleMetadata) {
+        return true;
+      }
+      const tier = item.sourceTier?.toLowerCase();
+      return tier !== "example" && tier !== "demo";
+    });
+    return filterMetadataItems(items, metadataSearch);
+  }, [managedMetadataInContextItems, metadataSearch, includeExampleMetadata]);
+
+  const trainManagedQueryOptions = useMemo<TrainManagedQueryOption[]>(() => {
+    return managedMetadataInContextItems
+      .filter((item) => {
+        const tier = item.sourceTier?.toLowerCase();
+        return tier === "user" && item.type.toLowerCase() === "query";
+      })
+      .map((item) => ({
+        datapointId: item.id,
+        name: item.name,
+        connectionId: item.connectionId || null,
+        scope: item.scope || null,
+        lifecycleVersion: item.lifecycleVersion || null,
+        lifecycleChangedAt: item.lifecycleChangedAt || null,
+        lifecycleChangedBy: item.lifecycleChangedBy || null,
+      }))
+      .sort((a, b) => {
+        const aTime = a.lifecycleChangedAt ? Date.parse(a.lifecycleChangedAt) : 0;
+        const bTime = b.lifecycleChangedAt ? Date.parse(b.lifecycleChangedAt) : 0;
+        if (aTime !== bTime) {
+          return bTime - aTime;
+        }
+        return a.name.localeCompare(b.name);
+      });
+  }, [managedMetadataInContextItems]);
+
+  const filteredTrainManagedQueryOptions = useMemo(() => {
+    const query = trainHistorySearch.trim().toLowerCase();
+    if (!query) {
+      return trainManagedQueryOptions;
+    }
+    return trainManagedQueryOptions.filter((item) => {
+      const haystack = `${item.name} ${item.datapointId} ${item.connectionId || ""} ${
+        item.scope || ""
+      } ${item.lifecycleChangedBy || ""}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [trainHistorySearch, trainManagedQueryOptions]);
+
+  const selectedTrainManagedOption = useMemo(
     () =>
-      filterMetadataItems(
-        (approvedMetadataQuery.data || []).map((item) =>
-          normalizeMetadataItem(item as unknown as Record<string, unknown>, "approved")
-        ),
-        metadataSearch
-      ),
-    [approvedMetadataQuery.data, metadataSearch]
+      trainManagedQueryOptions.find(
+        (item) => item.datapointId === trainTargetDatapointId
+      ) || null,
+    [trainManagedQueryOptions, trainTargetDatapointId]
   );
 
-  const managedMetadataItems = useMemo(
-    () =>
-      filterMetadataItems(
-        (managedMetadataQuery.data || []).map((item) => ({
-          id: item.datapoint_id,
-          name: item.name || item.datapoint_id,
-          type: item.type || "Unknown",
-          status: "managed" as const,
-          sourceTier: item.source_tier || null,
-          sourcePath: item.source_path || null,
-        })),
-        metadataSearch
-      ),
-    [managedMetadataQuery.data, metadataSearch]
+  const approvedMetadataItems = useMemo(() => {
+    if (!canRunQueries) {
+      return [];
+    }
+    const items = (approvedMetadataQuery.data || [])
+      .map((item) =>
+        normalizeMetadataItem(item as unknown as Record<string, unknown>, "approved")
+      )
+      .filter((item) => !managedMetadataIds.has(item.id));
+    return filterMetadataItems(dedupeMetadataItems(items), metadataSearch);
+  }, [approvedMetadataQuery.data, canRunQueries, managedMetadataIds, metadataSearch]);
+
+  const allMetadataItems = useMemo(
+    () => [...pendingMetadataItems, ...approvedMetadataItems, ...managedMetadataItems],
+    [approvedMetadataItems, managedMetadataItems, pendingMetadataItems]
   );
+
+  const selectedMetadataItem = useMemo(
+    () =>
+      allMetadataItems.find(
+        (item) => `${item.status}:${item.id}` === selectedMetadataKey
+      ) || null,
+    [allMetadataItems, selectedMetadataKey]
+  );
+
+  const selectedMetadataDetail = useMemo(() => {
+    if (!selectedMetadataKey) {
+      return null;
+    }
+    return (
+      metadataDetailCache[selectedMetadataKey] ||
+      selectedMetadataItem?.payload ||
+      null
+    );
+  }, [metadataDetailCache, selectedMetadataItem, selectedMetadataKey]);
 
   const metadataLoading =
     pendingMetadataQuery.isLoading ||
@@ -904,6 +1248,67 @@ export function ChatInterface() {
     managedMetadataQuery.error,
     pendingMetadataQuery.error,
   ]);
+
+  useEffect(() => {
+    if (
+      selectedMetadataKey &&
+      !allMetadataItems.some((item) => `${item.status}:${item.id}` === selectedMetadataKey)
+    ) {
+      setSelectedMetadataKey(null);
+    }
+  }, [allMetadataItems, selectedMetadataKey]);
+
+  const handleSelectMetadataItem = useCallback(
+    async (item: MetadataExplorerItem) => {
+      const key = `${item.status}:${item.id}`;
+      setSelectedMetadataKey(key);
+      setMetadataDetailError(null);
+
+      if (item.payload) {
+        setMetadataDetailCache((current) =>
+          current[key] ? current : { ...current, [key]: item.payload as Record<string, unknown> }
+        );
+        return;
+      }
+
+      const sourceTier = item.sourceTier?.toLowerCase();
+      if (sourceTier === "example" || sourceTier === "demo") {
+        setMetadataDetailCache((current) =>
+          current[key]
+            ? current
+            : {
+                ...current,
+                [key]: {
+                  datapoint_id: item.id,
+                  type: item.type,
+                  name: item.name,
+                  source_tier: item.sourceTier,
+                  source_path: item.sourcePath,
+                  note: "This is a bundled reference datapoint and not an editable managed file.",
+                },
+              }
+        );
+        return;
+      }
+
+      if (metadataDetailCache[key]) {
+        return;
+      }
+
+      setMetadataDetailLoadingKey(key);
+      try {
+        const datapoint = await apiClient.getDatapoint(item.id);
+        setMetadataDetailCache((current) => ({ ...current, [key]: datapoint }));
+      } catch (err) {
+        setMetadataDetailError(
+          err instanceof Error ? err.message : "Failed to load metadata detail."
+        );
+      } finally {
+        setMetadataDetailLoadingKey((current) => (current === key ? null : current));
+      }
+    },
+    [metadataDetailCache]
+  );
 
   const sortedConversationHistory = useMemo(
     () =>
@@ -937,19 +1342,21 @@ export function ChatInterface() {
   };
 
   // Handle send message
-  const handleSend = async () => {
-    const naturalLanguageQuery = input.trim();
-    const sqlQuery = sqlDraft.trim();
-    if (isLoading || !isInitialized) return;
-    if (composerMode === "nl" && !naturalLanguageQuery) return;
-    if (composerMode === "sql" && !sqlQuery) return;
+  const handleSend = async (override?: { mode?: "nl" | "sql"; message?: string }) => {
+    const requestMode = override?.mode || composerMode;
+    const naturalLanguageQuery =
+      requestMode === "nl" ? (override?.message ?? input).trim() : input.trim();
+    const sqlQuery = requestMode === "sql" ? (override?.message ?? sqlDraft).trim() : sqlDraft.trim();
+    if (isLoading || !canRunQueries) return;
+    if (requestMode === "nl" && !naturalLanguageQuery) return;
+    if (requestMode === "sql" && !sqlQuery) return;
 
     const userVisibleQuery =
-      composerMode === "sql"
+      requestMode === "sql"
         ? sqlQuery
         : naturalLanguageQuery;
     const requestMessage =
-      composerMode === "sql"
+      requestMode === "sql"
         ? sqlQuery
         : naturalLanguageQuery;
     const requestDatabaseId = targetDatabaseId || null;
@@ -965,7 +1372,7 @@ export function ChatInterface() {
       : [];
 
     setInput("");
-    if (composerMode === "sql") {
+    if (requestMode === "sql") {
       setSqlDraft("");
     }
     setError(null);
@@ -999,8 +1406,8 @@ export function ChatInterface() {
           session_summary: canReuseConversation ? sessionSummary : undefined,
           session_state: canReuseConversation ? sessionState : undefined,
           synthesize_simple_sql: synthesizeSimpleSql,
-          workflow_mode: workflowMode,
-          ...(composerMode === "sql"
+          workflow_mode: "auto",
+          ...(requestMode === "sql"
             ? {
                 execution_mode: "direct_sql" as const,
                 sql: sqlQuery,
@@ -1088,7 +1495,7 @@ export function ChatInterface() {
             setError(message);
             setErrorCategory(categorizeError(message));
             setLastFailedQuery(
-              composerMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
+              requestMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
             );
             setRetryCount((c) => c + 1);
             setLoading(false);
@@ -1097,9 +1504,15 @@ export function ChatInterface() {
             restoreInputFocus();
           },
           onSystemNotInitialized: (steps, message) => {
+            const setupMessage =
+              message ||
+              "Not initialized yet. Complete onboarding to connect a target database, then ask your first question.";
+            updateLastMessage({
+              content: setupMessage,
+            });
             setIsInitialized(false);
             setSetupSteps(steps);
-            setSetupError(message);
+            setSetupError(setupMessage);
             setLoading(false);
             setThinkingNotes([]);
             resetAgentStatus();
@@ -1113,7 +1526,7 @@ export function ChatInterface() {
       setError(errorMessage);
       setErrorCategory(categorizeError(errorMessage));
       setLastFailedQuery(
-        composerMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
+        requestMode === "sql" ? `__sql__${sqlQuery}` : naturalLanguageQuery
       );
       setRetryCount((c) => c + 1);
       setLoading(false);
@@ -1155,6 +1568,312 @@ export function ChatInterface() {
     setErrorCategory(null);
     setLastFailedQuery(null);
     restoreInputFocus("sql");
+  };
+
+  const findSourceQuestionForMessage = useCallback(
+    (messageId: string): string => {
+      const index = messages.findIndex((item) => item.id === messageId);
+      if (index < 0) {
+        return "";
+      }
+      for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+        if (messages[cursor]?.role === "user") {
+          return messages[cursor]?.content?.trim() || "";
+        }
+      }
+      return "";
+    },
+    [messages]
+  );
+
+  const handleOpenTrainModal = (payload: MessageTrainPayload) => {
+    const fallbackQuestion = findSourceQuestionForMessage(payload.message_id);
+    const nextQuestion = (payload.question || fallbackQuestion || "").trim();
+    const related = extractRelatedTablesFromSql(payload.sql || "");
+    setTrainCreateOnly(false);
+    setTrainMode("create");
+    setTrainTargetDatapointId("");
+    setTrainHistorySearch("");
+    setTrainQuestion(nextQuestion);
+    setTrainSql((payload.sql || "").trim());
+    setTrainName(
+      nextQuestion
+        ? `User-trained: ${nextQuestion.slice(0, 80)}`
+        : "User-trained query datapoint"
+    );
+    setTrainNotes("");
+    setTrainRelatedTables(related.join(", "));
+    setTrainLoadingExisting(false);
+    setTrainSyncing(false);
+    setTrainError(null);
+    setTrainNotice(null);
+    setTrainModalOpen(true);
+  };
+
+  const handleOpenCreateDatapointModal = useCallback(() => {
+    setTrainCreateOnly(true);
+    setTrainMode("create");
+    setTrainTargetDatapointId("");
+    setTrainHistorySearch("");
+    setTrainQuestion("");
+    setTrainSql("");
+    setTrainName("User-trained query datapoint");
+    setTrainNotes("");
+    setTrainRelatedTables(selectedSchemaTable || "");
+    setTrainLoadingExisting(false);
+    setTrainSyncing(false);
+    setTrainError(null);
+    setTrainNotice(null);
+    setTrainModalOpen(true);
+  }, [selectedSchemaTable]);
+
+  const closeTrainModal = useCallback(
+    (options?: { restoreFocus?: boolean; force?: boolean }) => {
+      if (trainSubmitting && !options?.force) {
+        return;
+      }
+      setTrainModalOpen(false);
+      setTrainCreateOnly(false);
+      setTrainError(null);
+      if (options?.restoreFocus !== false) {
+        restoreInputFocus("nl");
+      }
+    },
+    [restoreInputFocus, trainSubmitting]
+  );
+
+  const refreshMetadataExplorer = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["metadata-managed"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["metadata-approved", metadataConnectionId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["metadata-pending", metadataConnectionId],
+      }),
+    ]);
+    await Promise.all([
+      managedMetadataQuery.refetch(),
+      approvedMetadataQuery.refetch(),
+      pendingMetadataQuery.refetch(),
+    ]);
+  }, [
+    approvedMetadataQuery,
+    managedMetadataQuery,
+    metadataConnectionId,
+    pendingMetadataQuery,
+    queryClient,
+  ]);
+
+  useEffect(() => {
+    if (!trainModalOpen || trainMode !== "update") {
+      return;
+    }
+    if (!trainManagedQueryOptions.length) {
+      setTrainError("No existing user-trained query datapoints found yet. Use Create New.");
+      return;
+    }
+
+    const nextDatapointId = trainTargetDatapointId || trainManagedQueryOptions[0].datapointId;
+    if (!trainTargetDatapointId) {
+      setTrainTargetDatapointId(nextDatapointId);
+      return;
+    }
+
+    let cancelled = false;
+    const loadExistingDatapoint = async () => {
+      setTrainLoadingExisting(true);
+      setTrainError(null);
+      try {
+        const datapoint = await apiClient.getDatapoint(nextDatapointId);
+        if (cancelled) {
+          return;
+        }
+        const metadata =
+          datapoint.metadata && typeof datapoint.metadata === "object"
+            ? (datapoint.metadata as Record<string, unknown>)
+            : {};
+        const loadedQuestion =
+          typeof metadata.trained_from_question === "string"
+            ? metadata.trained_from_question.trim()
+            : "";
+        const loadedSql =
+          typeof datapoint.sql_template === "string" ? datapoint.sql_template.trim() : "";
+        const loadedName = typeof datapoint.name === "string" ? datapoint.name.trim() : "";
+        const loadedNotes =
+          typeof metadata.training_note === "string"
+            ? metadata.training_note
+            : typeof datapoint.description === "string"
+              ? datapoint.description
+              : "";
+        const loadedRelated = Array.isArray(datapoint.related_tables)
+          ? datapoint.related_tables
+              .filter((entry): entry is string => typeof entry === "string")
+              .join(", ")
+          : "";
+
+        setTrainQuestion((current) => loadedQuestion || current);
+        setTrainSql((current) => loadedSql || current);
+        setTrainName((current) => loadedName || current);
+        setTrainNotes((current) => loadedNotes || current);
+        setTrainRelatedTables((current) =>
+          loadedRelated || extractRelatedTablesFromSql(loadedSql || current).join(", ")
+        );
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        setTrainError(
+          err instanceof Error ? err.message : "Failed to load selected datapoint."
+        );
+      } finally {
+        if (!cancelled) {
+          setTrainLoadingExisting(false);
+        }
+      }
+    };
+
+    void loadExistingDatapoint();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [trainManagedQueryOptions, trainModalOpen, trainMode, trainTargetDatapointId]);
+
+  const waitForSyncCompletion = useCallback(async (jobId: string): Promise<void> => {
+    const timeoutMs = 60_000;
+    const pollIntervalMs = 1_000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const status = await apiClient.getSyncStatus();
+      if (status.job_id === jobId) {
+        if (status.status === "completed") {
+          return;
+        }
+        if (status.status === "failed") {
+          throw new Error(status.error || "Sync failed while indexing training datapoint.");
+        }
+      }
+      await sleep(pollIntervalMs);
+    }
+    throw new Error("Sync is still running. Retry may not use the latest training yet.");
+  }, []);
+
+  const handleSubmitTrainDatapoint = async () => {
+    const sql = trainSql.trim();
+    const question = trainQuestion.trim();
+    const isUpdateMode = trainMode === "update";
+    if (!sql) {
+      setTrainError("SQL is required to train a query datapoint.");
+      return;
+    }
+    if (!question) {
+      setTrainError("Question context is required.");
+      return;
+    }
+    if (isUpdateMode && !trainTargetDatapointId) {
+      setTrainError("Select an existing datapoint to update.");
+      return;
+    }
+
+    const relatedFromText = trainRelatedTables
+      .split(",")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean);
+    const relatedTables = Array.from(
+      new Set([...relatedFromText, ...extractRelatedTablesFromSql(sql)])
+    ).slice(0, 20);
+
+    const connectionId =
+      (isUpdateMode ? selectedTrainManagedOption?.connectionId || null : null) ||
+      (metadataConnectionId &&
+      metadataConnectionId !== ENV_DATABASE_CONNECTION_ID
+        ? metadataConnectionId
+        : null);
+
+    const datapointId = isUpdateMode
+      ? trainTargetDatapointId
+      : `query_user_trained_${slugifyDatapointToken(question)}_${String(Date.now()).slice(-6)}`;
+    const trainingNote = trainNotes.trim();
+    const payload: Record<string, unknown> = {
+      datapoint_id: datapointId,
+      type: "Query",
+      name: trainName.trim() || `User-trained query: ${question.slice(0, 80)}`,
+      owner: "trainer@datachat.local",
+      tags: ["user", "training", "query-template"],
+      metadata: {
+        source: "ui_train_datapoint",
+        source_tier: "user",
+        scope: connectionId ? "database" : "global",
+        connection_id: connectionId,
+        grain: "product_store_latest_snapshot",
+        exclusions:
+          "Anchored to latest available snapshot week; does not include forward demand forecasting or supplier lead-time risk.",
+        confidence_notes:
+          "User-trained datapoint from chat correction loop. Validate against business policy before external reporting.",
+        trained_from_question: question,
+        training_note: trainingNote || undefined,
+      },
+      description:
+        trainingNote ||
+        `User-trained query datapoint for: ${question}. Added from chat feedback loop.`,
+      sql_template: sql,
+      parameters: {},
+      validation: {
+        max_rows: 1000,
+      },
+      related_tables: relatedTables,
+    };
+
+    try {
+      setTrainSubmitting(true);
+      setTrainSyncing(false);
+      setTrainError(null);
+      if (isUpdateMode) {
+        await apiClient.updateDatapoint(datapointId, payload);
+      } else {
+        await apiClient.createDatapoint(payload);
+      }
+
+      await refreshMetadataExplorer();
+
+      let syncWarning: string | null = null;
+      try {
+        setTrainSyncing(true);
+        const syncJob = await apiClient.triggerSync({
+          ...(connectionId
+            ? { scope: "database" as const, connection_id: connectionId }
+            : { scope: "auto" as const }),
+          conflict_mode: "prefer_latest",
+        });
+        await waitForSyncCompletion(syncJob.job_id);
+        await refreshMetadataExplorer();
+      } catch (syncErr) {
+        syncWarning =
+          syncErr instanceof Error
+            ? syncErr.message
+            : "Sync is still in progress. Retry may not use the latest training yet.";
+      } finally {
+        setTrainSyncing(false);
+      }
+
+      setTrainNotice(
+        syncWarning
+          ? `${isUpdateMode ? "Datapoint updated" : "Datapoint created"}, but sync is still catching up.`
+          : `${isUpdateMode ? "Datapoint updated" : "Datapoint created"} and indexed. Re-running your question...`
+      );
+      closeTrainModal({ restoreFocus: false, force: true });
+      setTrainMode("create");
+      setTrainTargetDatapointId("");
+      setComposerMode("nl");
+      await handleSend({ mode: "nl", message: question });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to save training datapoint.";
+      setTrainError(message);
+    } finally {
+      setTrainSyncing(false);
+      setTrainSubmitting(false);
+    }
   };
 
   const handleStartNewConversation = () => {
@@ -1347,6 +2066,34 @@ export function ChatInterface() {
   }, [shortcutsOpen]);
 
   useEffect(() => {
+    if (!trainNotice) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setTrainNotice(null), 6000);
+    return () => window.clearTimeout(timeout);
+  }, [trainNotice]);
+
+  useEffect(() => {
+    if (!trainModalOpen) {
+      return;
+    }
+    if (typeof window === "undefined") {
+      return;
+    }
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    const previousOverflow = document.body.style.overflow;
+    const previousPaddingRight = document.body.style.paddingRight;
+    document.body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) {
+      document.body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
+    };
+  }, [trainModalOpen]);
+
+  useEffect(() => {
     const handleGlobalShortcuts = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName?.toLowerCase();
@@ -1360,6 +2107,11 @@ export function ChatInterface() {
       const key = event.key.toLowerCase();
 
       if (event.key === "Escape") {
+        if (trainModalOpen) {
+          event.preventDefault();
+          closeTrainModal();
+          return;
+        }
         if (toolApprovalOpen) {
           event.preventDefault();
           setToolApprovalOpen(false);
@@ -1377,6 +2129,10 @@ export function ChatInterface() {
       if (hasModifier && key === "k") {
         event.preventDefault();
         restoreInputFocus();
+        return;
+      }
+
+      if (trainModalOpen) {
         return;
       }
 
@@ -1408,7 +2164,7 @@ export function ChatInterface() {
     return () => {
       window.removeEventListener("keydown", handleGlobalShortcuts);
     };
-  }, [restoreInputFocus, shortcutsOpen, toolApprovalOpen]);
+  }, [closeTrainModal, restoreInputFocus, shortcutsOpen, toolApprovalOpen, trainModalOpen]);
 
   const handleInitialize = async (
     databaseUrl: string,
@@ -1456,7 +2212,7 @@ export function ChatInterface() {
               <div className="min-w-0">
                 <h1 className="text-2xl font-bold">DataChat</h1>
                 <p className="truncate text-sm text-muted-foreground">
-                  Ask questions in natural language
+                  Decision workflows for business decision makers
                 </p>
               </div>
             </div>
@@ -1487,21 +2243,6 @@ export function ChatInterface() {
                   ))}
                 </select>
               )}
-              <select
-                value={workflowMode}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  if (next === "finance_variance_v1" || next === "auto") {
-                    setWorkflowMode(next);
-                  }
-                }}
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                aria-label="Workflow mode"
-                disabled={isLoading}
-              >
-                <option value="auto">Workflow: Auto</option>
-                <option value="finance_variance_v1">Workflow: Finance Brief v1</option>
-              </select>
               <Button
                 variant="outline"
                 size="icon"
@@ -1571,7 +2312,7 @@ export function ChatInterface() {
                 aria-label="Chat message stream"
                 className="mx-auto w-full max-w-5xl"
               >
-              {!isInitialized && !setupCompleted && (
+              {!canRunQueries && !setupCompleted && (
                 <SystemSetup
                   steps={setupSteps}
                   onInitialize={handleInitialize}
@@ -1580,13 +2321,18 @@ export function ChatInterface() {
                   notice={setupNotice}
                 />
               )}
-              {!isInitialized && setupCompleted && (
+              {!canRunQueries && setupCompleted && (
                 <div className="mb-4 rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                   Setup saved. Add DataPoints from{" "}
                   <Link href="/databases" className="underline">
                     Database Manager
                   </Link>{" "}
                   (or run <strong>datachat demo</strong>) to enable chat.
+                </div>
+              )}
+              {trainNotice && (
+                <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                  {trainNotice}
                 </div>
               )}
               {messages.length === 0 && (
@@ -1603,21 +2349,32 @@ export function ChatInterface() {
                 </div>
               )}
 
-              {messages.map((message) => (
-                <Message
-                  key={message.id}
-                  message={message}
-                  displayMode={resultLayoutMode}
-                  showAgentTimingBreakdown={showAgentTimingBreakdown}
-                  onEditSqlDraft={handleOpenSqlEditor}
-                  onSubmitFeedback={handleSubmitFeedback}
-                  onClarifyingAnswer={(question) => {
-                    setComposerMode("nl");
-                    setInput(`Regarding "${question}": `);
-                    restoreInputFocus("nl");
-                  }}
-                />
-              ))}
+              {messages.map((message, index) => {
+                let sourceQuestion = "";
+                for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+                  if (messages[cursor]?.role === "user") {
+                    sourceQuestion = messages[cursor]?.content || "";
+                    break;
+                  }
+                }
+                return (
+                  <Message
+                    key={message.id}
+                    message={message}
+                    sourceQuestion={sourceQuestion}
+                    displayMode={resultLayoutMode}
+                    showAgentTimingBreakdown={showAgentTimingBreakdown}
+                    onEditSqlDraft={handleOpenSqlEditor}
+                    onTrainDatapoint={handleOpenTrainModal}
+                    onSubmitFeedback={handleSubmitFeedback}
+                    onClarifyingAnswer={(question) => {
+                      setComposerMode("nl");
+                      setInput(`Regarding "${question}": `);
+                      restoreInputFocus("nl");
+                    }}
+                  />
+                );
+              })}
 
               {isLoading && showLiveReasoning && (
                 <Card className="mb-4 border-primary/20 bg-primary/5">
@@ -1714,7 +2471,7 @@ export function ChatInterface() {
                     type="button"
                     onClick={() => handleApplyTemplate(template.id)}
                     className="rounded-full border border-border/70 bg-background/80 px-3 py-1 text-xs text-foreground/90 shadow-sm transition hover:bg-muted"
-                    disabled={isLoading || !isInitialized}
+                    disabled={isLoading || !canRunQueries}
                   >
                     {template.label}
                   </button>
@@ -1758,13 +2515,13 @@ export function ChatInterface() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyPress}
                     placeholder="Ask a question about your data..."
-                    disabled={isLoading || !isInitialized}
+                    disabled={isLoading || !canRunQueries}
                     className="flex-1"
                     aria-label="Chat query input"
                   />
                   <Button
                     onClick={handleSend}
-                    disabled={!input.trim() || isLoading || !isInitialized}
+                    disabled={!input.trim() || isLoading || !canRunQueries}
                     size="icon"
                     aria-label="Send chat message"
                   >
@@ -1783,7 +2540,7 @@ export function ChatInterface() {
                     onChange={(event) => setSqlDraft(event.target.value)}
                     onKeyDown={handleSqlEditorKeyPress}
                     placeholder="SELECT * FROM your_table LIMIT 10;"
-                    disabled={isLoading || !isInitialized}
+                    disabled={isLoading || !canRunQueries}
                     className="min-h-[120px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                     aria-label="SQL editor input"
                   />
@@ -1793,7 +2550,7 @@ export function ChatInterface() {
                     </p>
                     <Button
                       onClick={handleSend}
-                      disabled={!sqlDraft.trim() || isLoading || !isInitialized}
+                      disabled={!sqlDraft.trim() || isLoading || !canRunQueries}
                       size="sm"
                       aria-label="Run SQL draft"
                     >
@@ -1836,16 +2593,227 @@ export function ChatInterface() {
             pendingMetadataItems={pendingMetadataItems}
             approvedMetadataItems={approvedMetadataItems}
             managedMetadataItems={managedMetadataItems}
+            selectedMetadataKey={selectedMetadataKey}
+            metadataDetail={selectedMetadataDetail}
+            metadataDetailLoading={Boolean(
+              selectedMetadataKey && metadataDetailLoadingKey === selectedMetadataKey
+            )}
+            metadataDetailError={metadataDetailError}
+            metadataContextNote={metadataContextNote}
             selectedSchemaTable={selectedSchemaTable}
             onToggle={() => setIsSchemaSidebarOpen((prev) => !prev)}
             onExplorerModeChange={setExplorerMode}
             onSearchChange={handleSchemaSearchChange}
             onMetadataSearchChange={setMetadataSearch}
+            includeExampleMetadata={includeExampleMetadata}
+            onIncludeExampleMetadataChange={setIncludeExampleMetadata}
+            onSelectMetadataItem={handleSelectMetadataItem}
             onSelectTable={handleSchemaSelectTable}
             onUseTable={handleSchemaUseTable}
+            onAddDatapoint={handleOpenCreateDatapointModal}
           />
         </div>
       </div>
+      {isClientMounted &&
+        trainModalOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] overflow-y-auto bg-black/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Train DataChat"
+            onClick={() => {
+              closeTrainModal();
+            }}
+          >
+            <div className="flex min-h-full items-start justify-center py-6">
+              <div
+                className="w-full max-w-2xl rounded-lg bg-background p-6 shadow-xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <h3 className="text-base font-semibold">Train DataChat</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {trainCreateOnly
+                    ? "Create a managed query datapoint, sync it, then retry the question."
+                    : "Create or update a managed query datapoint, sync it, then retry the question."}
+                </p>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTrainMode("create");
+                      setTrainTargetDatapointId("");
+                      setTrainError(null);
+                    }}
+                    className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
+                      trainMode === "create"
+                        ? "border-primary/50 bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    }`}
+                    disabled={trainSubmitting || trainCreateOnly}
+                  >
+                    Create New
+                  </button>
+                  {!trainCreateOnly && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTrainMode("update");
+                        setTrainHistorySearch("");
+                        setTrainError(null);
+                        if (!trainTargetDatapointId && trainManagedQueryOptions.length > 0) {
+                          setTrainTargetDatapointId(trainManagedQueryOptions[0].datapointId);
+                        }
+                      }}
+                      className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
+                        trainMode === "update"
+                          ? "border-primary/50 bg-primary/10 text-primary"
+                          : "border-border text-muted-foreground hover:bg-muted"
+                      }`}
+                      disabled={trainSubmitting}
+                    >
+                      Update Existing
+                    </button>
+                  )}
+                </div>
+
+                {trainMode === "update" && (
+                  <div className="mt-3 space-y-2">
+                    <div className="text-xs font-medium text-foreground">Training history</div>
+                    <Input
+                      value={trainHistorySearch}
+                      onChange={(event) => setTrainHistorySearch(event.target.value)}
+                      placeholder="Search by name, id, scope, or updater"
+                      className="h-8 text-xs"
+                      disabled={trainSubmitting || trainLoadingExisting}
+                    />
+                    <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border border-border/70 bg-muted/20 p-2">
+                      {!filteredTrainManagedQueryOptions.length ? (
+                        <div className="px-2 py-1 text-xs text-muted-foreground">
+                          No matching user-trained query datapoints.
+                        </div>
+                      ) : (
+                        filteredTrainManagedQueryOptions.map((item) => (
+                          <button
+                            key={item.datapointId}
+                            type="button"
+                            onClick={() => {
+                              setTrainTargetDatapointId(item.datapointId);
+                              setTrainError(null);
+                            }}
+                            disabled={trainSubmitting || trainLoadingExisting}
+                            className={`w-full rounded-md border px-2 py-2 text-left transition ${
+                              item.datapointId === trainTargetDatapointId
+                                ? "border-primary/50 bg-primary/10"
+                                : "border-border/60 bg-background hover:bg-muted/60"
+                            }`}
+                          >
+                            <div className="truncate text-xs font-medium text-foreground">
+                              {item.name}
+                            </div>
+                            <div className="truncate text-[11px] text-muted-foreground">
+                              {item.datapointId}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                              <span>Updated: {formatTrainHistoryTimestamp(item.lifecycleChangedAt)}</span>
+                              {item.lifecycleVersion ? <span>v{item.lifecycleVersion}</span> : null}
+                              {item.scope ? <span>scope:{item.scope}</span> : null}
+                              {item.lifecycleChangedBy ? <span>by:{item.lifecycleChangedBy}</span> : null}
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-4 max-h-[62vh] space-y-3 overflow-y-auto pr-1">
+                  <label className="block text-xs font-medium text-foreground">
+                    Question context
+                    <Input
+                      value={trainQuestion}
+                      onChange={(event) => setTrainQuestion(event.target.value)}
+                      placeholder="Which question should this datapoint answer?"
+                      className="mt-1"
+                      disabled={trainSubmitting || trainLoadingExisting}
+                    />
+                  </label>
+                  <label className="block text-xs font-medium text-foreground">
+                    SQL template
+                    <textarea
+                      value={trainSql}
+                      onChange={(event) => setTrainSql(event.target.value)}
+                      className="mt-1 min-h-[140px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      placeholder="SELECT ..."
+                      disabled={trainSubmitting || trainLoadingExisting}
+                    />
+                  </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="block text-xs font-medium text-foreground">
+                      Datapoint name
+                      <Input
+                        value={trainName}
+                        onChange={(event) => setTrainName(event.target.value)}
+                        placeholder="User-trained query datapoint"
+                        className="mt-1"
+                        disabled={trainSubmitting || trainLoadingExisting}
+                      />
+                    </label>
+                    <label className="block text-xs font-medium text-foreground">
+                      Related tables
+                      <Input
+                        value={trainRelatedTables}
+                        onChange={(event) => setTrainRelatedTables(event.target.value)}
+                        placeholder="public.table_a, public.table_b"
+                        className="mt-1"
+                        disabled={trainSubmitting || trainLoadingExisting}
+                      />
+                    </label>
+                  </div>
+                  <label className="block text-xs font-medium text-foreground">
+                    Notes (optional)
+                    <textarea
+                      value={trainNotes}
+                      onChange={(event) => setTrainNotes(event.target.value)}
+                      className="mt-1 min-h-[90px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      placeholder="What was wrong and how should DataChat answer this next time?"
+                      disabled={trainSubmitting || trainLoadingExisting}
+                    />
+                  </label>
+                </div>
+
+                {(trainLoadingExisting || trainSyncing) && (
+                  <div className="mt-3 inline-flex items-center gap-2 rounded-md border border-border/80 bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground">
+                    <Loader2 size={12} className="animate-spin" />
+                    {trainLoadingExisting ? "Loading existing training..." : "Syncing training datapoint..."}
+                  </div>
+                )}
+
+                {trainError && (
+                  <div className="mt-3 rounded border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {trainError}
+                  </div>
+                )}
+
+                <div className="mt-5 flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => closeTrainModal()}
+                    disabled={trainSubmitting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button onClick={handleSubmitTrainDatapoint} disabled={trainSubmitting}>
+                    {trainSubmitting ? <Loader2 size={14} className="mr-2 animate-spin" /> : null}
+                    {trainMode === "update" ? "Update, Sync, and Retry" : "Save, Sync, and Retry"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
       {shortcutsOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"

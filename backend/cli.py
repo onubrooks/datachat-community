@@ -73,7 +73,7 @@ from backend.models.datapoint import DataPoint
 from backend.pipeline.orchestrator import DataChatPipeline
 from backend.profiling.generator import DataPointGenerator
 from backend.profiling.profiler import SchemaProfiler
-from backend.settings_store import apply_config_defaults
+from backend.settings_store import apply_config_defaults, is_placeholder_database_url
 from backend.sync.orchestrator import save_datapoint_to_disk
 from backend.tools import ToolExecutor, initialize_tools
 from backend.tools.base import ToolContext
@@ -300,25 +300,35 @@ state = CLIState()
 # ============================================================================
 
 
-def _resolve_target_database_url(settings) -> tuple[str | None, str]:
+def _resolve_target_database_url(settings=None) -> tuple[str | None, str]:
     """Resolve target database URL with explicit precedence."""
-    if settings.database.url:
-        return str(settings.database.url), "settings"
+    if settings is not None:
+        database_settings = getattr(settings, "database", None)
+        database_url_setting = getattr(database_settings, "url", None)
+        if database_url_setting:
+            database_url = str(database_url_setting)
+            if not is_placeholder_database_url(database_url):
+                return database_url, "settings"
 
     stored = state.get_connection_string()
-    if stored:
+    if stored and not is_placeholder_database_url(stored):
         return stored, "saved_config"
 
     return None, "none"
 
 
-def _resolve_system_database_url(settings) -> tuple[str | None, str]:
+def _resolve_system_database_url(settings=None) -> tuple[str | None, str]:
     """Resolve system database URL with explicit precedence."""
-    if settings.system_database.url:
-        return str(settings.system_database.url), "settings"
+    if settings is not None:
+        system_settings = getattr(settings, "system_database", None)
+        system_database_url_setting = getattr(system_settings, "url", None)
+        if system_database_url_setting:
+            system_database_url = str(system_database_url_setting)
+            if not is_placeholder_database_url(system_database_url):
+                return system_database_url, "settings"
 
     stored = state.get_system_database_url()
-    if stored:
+    if stored and not is_placeholder_database_url(stored):
         return stored, "saved_config"
 
     return None, "none"
@@ -659,6 +669,59 @@ async def _clear_demo_tables_for_database(
         )
     for statement in statements:
         await connector.execute(statement)
+
+
+_SYSTEM_DB_ALLOWED_TABLES: tuple[str, ...] = (
+    "database_connections",
+    "profiling_jobs",
+    "profiling_profiles",
+    "pending_datapoints",
+    "datapoint_generation_jobs",
+    "ui_feedback",
+    "ui_conversations",
+)
+
+
+async def _reset_system_database_postgres(connector: PostgresConnector) -> None:
+    """Drop non-DataChat tables and clear DataChat-owned tables in the system DB."""
+    allowed_literal = ", ".join(f"'{name}'" for name in _SYSTEM_DB_ALLOWED_TABLES)
+    await connector.execute(
+        f"""
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN (
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'public'
+          )
+          LOOP
+            IF r.tablename = ANY (ARRAY[{allowed_literal}]) THEN
+              CONTINUE;
+            END IF;
+            EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+          END LOOP;
+        END $$;
+        """
+    )
+    await connector.execute(
+        f"""
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN (
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'public'
+              AND tablename = ANY (ARRAY[{allowed_literal}])
+          )
+          LOOP
+            EXECUTE
+              'TRUNCATE TABLE public.' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE';
+          END LOOP;
+        END $$;
+        """
+    )
 
 
 async def create_pipeline_from_config(
@@ -2451,6 +2514,53 @@ def dev(
         raise click.ClickException("Nothing to run. Remove --no-backend or --no-frontend.")
 
     if not no_backend:
+        apply_config_defaults()
+        provider_env = os.getenv("LLM_DEFAULT_PROVIDER")
+        default_provider = (provider_env or "openai").strip().lower()
+
+        def _is_placeholder_key(value: str | None) -> bool:
+            if not value:
+                return True
+            normalized = value.strip().lower()
+            return normalized in {
+                "your-key-here",
+                "sk-your-key-here",
+                "sk-ant-your-key-here",
+            } or "your-key-here" in normalized
+
+        key_by_provider = {
+            "openai": "LLM_OPENAI_API_KEY",
+            "anthropic": "LLM_ANTHROPIC_API_KEY",
+            "google": "LLM_GOOGLE_API_KEY",
+        }
+        required_providers: set[str] = {default_provider}
+
+        for override_key in (
+            "LLM_CLASSIFIER_PROVIDER",
+            "LLM_SQL_PROVIDER",
+            "LLM_FALLBACK_PROVIDER",
+        ):
+            provider_value = (os.getenv(override_key) or "").strip().lower()
+            if provider_value:
+                required_providers.add(provider_value)
+
+        missing_key_vars = sorted(
+            {
+                key_by_provider[provider]
+                for provider in required_providers
+                if provider in key_by_provider
+                and _is_placeholder_key(os.getenv(key_by_provider[provider]))
+            }
+        )
+        if missing_key_vars:
+            missing_list = ", ".join(missing_key_vars)
+            console.print(
+                "[yellow]Warning:[/yellow] Missing LLM API key(s): "
+                f"{missing_list}. Backend will still start, but queries may fail until "
+                "keys are configured in Settings or env."
+            )
+
+    if not no_backend:
         backend_cmd = [
             sys.executable,
             "-m",
@@ -2621,7 +2731,7 @@ def setup(
                     initialize_tools(refreshed_settings.tools.policy_path)
                     executor = ToolExecutor()
                     ctx = ToolContext(user_id="cli", correlation_id="setup", approved=True)
-                    args = {"depth": "metrics_basic", "batch_size": 10}
+                    args = {"depth": "metrics_full", "batch_size": 10}
                     if resolved_max_tables:
                         args["max_tables"] = resolved_max_tables
                     result = await executor.execute(
@@ -3159,7 +3269,7 @@ def onboarding_wizard(
 @click.option(
     "--depth",
     type=click.Choice(["schema_only", "metrics_basic", "metrics_full"]),
-    default="metrics_basic",
+    default="metrics_full",
     show_default=True,
     help="Generation depth for --generate-after-profile.",
 )
@@ -3284,7 +3394,13 @@ def reset(
 
     async def run_reset() -> None:
         apply_config_defaults()
-        settings = get_settings()
+        settings = None
+        settings_load_error: str | None = None
+        try:
+            settings = get_settings()
+        except Exception as exc:
+            settings_load_error = str(exc)
+            clear_settings_cache()
 
         if drop_all_target and not include_target:
             raise click.ClickException("--drop-all-target requires --include-target.")
@@ -3302,27 +3418,44 @@ def reset(
                 console.print("[yellow]Reset cancelled.[/yellow]")
                 return
 
+        if settings_load_error:
+            console.print(
+                "[yellow]Runtime settings are invalid; continuing reset with saved config "
+                f"fallbacks. ({settings_load_error})[/yellow]"
+            )
+
         system_db_url, _ = _resolve_system_database_url(settings)
         if system_db_url:
             from urllib.parse import urlparse
 
-            parsed = urlparse(system_db_url)
-            connector = PostgresConnector(
-                host=parsed.hostname or "localhost",
-                port=parsed.port or 5432,
-                database=parsed.path.lstrip("/") if parsed.path else "datachat",
-                user=parsed.username or "postgres",
-                password=parsed.password or "",
-            )
-            await connector.connect()
             try:
-                await connector.execute(
-                    "TRUNCATE database_connections, profiling_jobs, "
-                    "profiling_profiles, pending_datapoints"
+                system_db_type = infer_database_type(system_db_url)
+            except Exception:
+                console.print("[yellow]System DB URL is invalid; skipped registry reset.[/yellow]")
+                system_db_type = None
+            if system_db_type and system_db_type != "postgresql":
+                console.print(
+                    "[yellow]System DB reset currently supports PostgreSQL URLs only; "
+                    "skipped registry reset.[/yellow]"
                 )
-                console.print("[green]✓ System DB state cleared[/green]")
-            finally:
-                await connector.close()
+            elif system_db_type == "postgresql":
+                parsed = urlparse(system_db_url)
+                connector = PostgresConnector(
+                    host=parsed.hostname or "localhost",
+                    port=parsed.port or 5432,
+                    database=parsed.path.lstrip("/") if parsed.path else "datachat",
+                    user=parsed.username or "postgres",
+                    password=parsed.password or "",
+                )
+                await connector.connect()
+                try:
+                    await _reset_system_database_postgres(connector)
+                    console.print(
+                        "[green]✓ System DB state cleared "
+                        "(non-DataChat tables dropped, DataChat tables truncated)[/green]"
+                    )
+                finally:
+                    await connector.close()
         else:
             console.print("[yellow]System DB not configured; skipped registry reset.[/yellow]")
 
@@ -3331,43 +3464,58 @@ def reset(
             if not target_db_url:
                 console.print("[yellow]Target DB not configured; skipped target reset.[/yellow]")
             else:
-                target_db_type = infer_database_type(target_db_url)
-                connector = create_connector(
-                    database_url=target_db_url,
-                    database_type=target_db_type,
-                )
-                await connector.connect()
                 try:
-                    if drop_all_target:
-                        if target_db_type != "postgresql":
-                            raise click.ClickException(
-                                "--drop-all-target currently supports PostgreSQL only."
+                    target_db_type = infer_database_type(target_db_url)
+                except Exception:
+                    console.print("[yellow]Target DB URL is invalid; skipped target reset.[/yellow]")
+                    target_db_type = None
+                if target_db_type is None:
+                    target_db_url = None
+                if target_db_url is None:
+                    pass
+                else:
+                    connector = create_connector(
+                        database_url=target_db_url,
+                        database_type=target_db_type,
+                    )
+                    await connector.connect()
+                    try:
+                        if drop_all_target:
+                            if target_db_type != "postgresql":
+                                raise click.ClickException(
+                                    "--drop-all-target currently supports PostgreSQL only."
+                                )
+                            await connector.execute(
+                                """
+                                DO $$
+                                DECLARE r RECORD;
+                                BEGIN
+                                  FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public')
+                                  LOOP
+                                    EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename)
+                                    || ' CASCADE';
+                                  END LOOP;
+                                END $$;
+                                """
                             )
-                        await connector.execute(
-                            """
-                            DO $$
-                            DECLARE r RECORD;
-                            BEGIN
-                              FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public')
-                              LOOP
-                                EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename)
-                                || ' CASCADE';
-                              END LOOP;
-                            END $$;
-                            """
-                        )
-                        console.print("[green]✓ Target DB tables dropped[/green]")
-                    else:
-                        await _clear_demo_tables_for_database(connector, target_db_type)
-                        console.print("[green]✓ Target DB demo tables cleared[/green]")
-                finally:
-                    await connector.close()
+                            console.print("[green]✓ Target DB tables dropped[/green]")
+                        else:
+                            await _clear_demo_tables_for_database(connector, target_db_type)
+                            console.print("[green]✓ Target DB demo tables cleared[/green]")
+                    finally:
+                        await connector.close()
 
         if not keep_vectors:
             vector_store = VectorStore()
             await vector_store.initialize()
             await vector_store.clear()
-            shutil.rmtree(settings.chroma.persist_dir, ignore_errors=True)
+            persist_dir = Path(os.getenv("CHROMA_PERSIST_DIR", "chroma_data"))
+            if settings is not None:
+                chroma_settings = getattr(settings, "chroma", None)
+                chroma_persist_dir = getattr(chroma_settings, "persist_dir", None)
+                if chroma_persist_dir:
+                    persist_dir = Path(chroma_persist_dir)
+            shutil.rmtree(persist_dir, ignore_errors=True)
             console.print("[green]✓ Local vector store cleared[/green]")
 
         if clear_managed_datapoints:
@@ -3945,7 +4093,7 @@ def approve_all_pending(profile_id: str | None, latest: bool):
 @click.option(
     "--depth",
     type=click.Choice(["schema_only", "metrics_basic", "metrics_full"]),
-    default="metrics_basic",
+    default="metrics_full",
     show_default=True,
 )
 @click.option("--tables", multiple=True, help="Optional table names to include.")

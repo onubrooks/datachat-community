@@ -27,7 +27,9 @@ from backend.connectors.base import (
 )
 from backend.connectors.factory import create_connector
 from backend.initialization.initializer import SystemInitializer
+from backend.knowledge.retriever import Retriever
 from backend.models.api import DataSource
+from backend.pipeline.orchestrator import DataChatPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +249,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
         initializer = SystemInitializer(app_state)
         status_state = await initializer.status()
-        if not status_state.has_databases:
+        if not status_state.has_databases and not database_url:
             await websocket.send_json(
                 {
                     "event": "error",
@@ -424,15 +426,49 @@ async def websocket_chat(websocket: WebSocket) -> None:
         # Get pipeline from app state
         pipeline = app_state.get("pipeline")
         if pipeline is None:
-            await websocket.send_json(
-                {
-                    "event": "error",
-                    "error": "service_unavailable",
-                    "message": "Pipeline not initialized. Please try again later.",
-                }
-            )
-            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
-            return
+            if database_url:
+                try:
+                    connector = create_connector(
+                        database_type=database_type,
+                        database_url=database_url,
+                        pool_size=settings.database.pool_size,
+                    )
+                    await connector.connect()
+                    retriever = Retriever(
+                        vector_store=app_state["vector_store"],
+                        knowledge_graph=app_state["knowledge_graph"],
+                    )
+                    pipeline = DataChatPipeline(
+                        retriever=retriever,
+                        connector=connector,
+                        max_retries=3,
+                    )
+                    app_state["connector"] = connector
+                    app_state["pipeline"] = pipeline
+                    logger.info("Initialized pipeline lazily from managed connection.")
+                except Exception as exc:
+                    await websocket.send_json(
+                        {
+                            "event": "error",
+                            "error": "service_unavailable",
+                            "message": (
+                                "Pipeline is unavailable and lazy initialization failed: "
+                                f"{exc}"
+                            ),
+                        }
+                    )
+                    await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+                    return
+            else:
+                await websocket.send_json(
+                    {
+                        "event": "error",
+                        "error": "service_unavailable",
+                        "message": "Pipeline not initialized. Please try again later.",
+                    }
+                )
+                await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+                return
 
         # Convert conversation history to pipeline format
         history = [

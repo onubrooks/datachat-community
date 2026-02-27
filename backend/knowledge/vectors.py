@@ -8,6 +8,10 @@ Supports semantic search, persistence, and metadata storage.
 import asyncio
 import json
 import logging
+import os
+import re
+import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +89,9 @@ class VectorStore:
         self.client: chromadb.ClientAPI | None = None
         self.collection: chromadb.Collection | None = None
         self.embedding_function: OpenAIEmbeddingFunction | None = None
+        # Keep embedding payloads below common context windows for small models.
+        self.max_document_chars = 6000
+        self.max_field_chars = 1200
 
         logger.info(
             f"VectorStore initialized: collection={self.collection_name}, "
@@ -102,8 +109,8 @@ class VectorStore:
             VectorStoreError: If initialization fails
         """
         try:
-            # Ensure persist directory exists
-            self.persist_directory.mkdir(parents=True, exist_ok=True)
+            # Ensure persist directory exists and is writable, otherwise switch to fallback.
+            await asyncio.to_thread(self._ensure_writable_persist_directory)
 
             # Initialize Chroma client (sync, will wrap in to_thread)
             await asyncio.to_thread(self._init_client)
@@ -170,36 +177,147 @@ class VectorStore:
             logger.warning("No datapoints to add")
             return 0
 
+        unique_datapoints = list({dp.datapoint_id: dp for dp in datapoints}.values())
+
         try:
-            total_added = 0
-            unique_datapoints = list({dp.datapoint_id: dp for dp in datapoints}.values())
-
-            # Process in batches
-            for i in range(0, len(unique_datapoints), batch_size):
-                batch = unique_datapoints[i : i + batch_size]
-
-                # Prepare batch data
-                ids = [dp.datapoint_id for dp in batch]
-                documents = [self._create_document(dp) for dp in batch]
-                metadatas = [self._create_metadata(dp) for dp in batch]
-
-                # Add to Chroma (async wrapper)
-                await asyncio.to_thread(
-                    self.collection.upsert,
-                    ids=ids,
-                    documents=documents,
-                    metadatas=metadatas,
-                )
-
-                total_added += len(batch)
-                logger.debug(f"Upserted batch of {len(batch)} datapoints ({total_added} total)")
-
-            logger.info(f"Successfully upserted {total_added} datapoints to vector store")
-            return total_added
-
+            return await self._upsert_datapoint_batches(unique_datapoints, batch_size)
         except Exception as e:
+            if self._is_readonly_error(e):
+                logger.warning(
+                    "Vector store is readonly at '%s'; attempting writable recovery.",
+                    self.persist_directory,
+                )
+                recovered = await self._recover_from_readonly_error()
+                if recovered:
+                    try:
+                        return await self._upsert_datapoint_batches(unique_datapoints, batch_size)
+                    except Exception as retry_error:
+                        if self._is_readonly_error(retry_error):
+                            logger.warning(
+                                "Readonly persisted after recovery; rotating to a fresh "
+                                "persist directory."
+                            )
+                            rotated = await self._force_rotate_persist_directory()
+                            if rotated:
+                                return await self._upsert_datapoint_batches(
+                                    unique_datapoints, batch_size
+                                )
+                        logger.error(
+                            "Vector add retry failed after readonly recovery: %s", retry_error
+                        )
+                        raise VectorStoreError(
+                            f"Failed to add datapoints after readonly recovery: {retry_error}"
+                        ) from retry_error
             logger.error(f"Failed to add datapoints: {e}")
             raise VectorStoreError(f"Failed to add datapoints: {e}") from e
+
+    async def _upsert_datapoint_batches(
+        self, datapoints: list[DataPoint], batch_size: int
+    ) -> int:
+        total_added = 0
+
+        for i in range(0, len(datapoints), batch_size):
+            batch = datapoints[i : i + batch_size]
+
+            ids = [dp.datapoint_id for dp in batch]
+            documents = [
+                self._truncate_document(self._create_document(dp), dp.datapoint_id)
+                for dp in batch
+            ]
+            metadatas = [self._create_metadata(dp) for dp in batch]
+
+            await asyncio.to_thread(
+                self.collection.upsert,
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+            )
+
+            total_added += len(batch)
+            logger.debug("Upserted batch of %s datapoints (%s total)", len(batch), total_added)
+
+        logger.info("Successfully upserted %s datapoints to vector store", total_added)
+        return total_added
+
+    def _probe_directory_writable(self, directory: Path) -> bool:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            probe = directory / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
+
+    def _existing_files_writable(self, directory: Path) -> bool:
+        """Best-effort check that persisted Chroma files are writable."""
+        if not directory.exists():
+            return True
+        try:
+            for path in directory.rglob("*"):
+                if path.is_file() and not os.access(path, os.W_OK):
+                    return False
+        except Exception:
+            return False
+        return True
+
+    def _ensure_writable_persist_directory(self) -> None:
+        if self._probe_directory_writable(self.persist_directory) and self._existing_files_writable(
+            self.persist_directory
+        ):
+            return
+
+        logger.warning(
+            "Configured vector persist directory is not writable: %s", self.persist_directory
+        )
+        fallback_candidates = [
+            Path.home() / ".datachat" / "chroma_data",
+            Path(tempfile.gettempdir()) / "datachat_chroma",
+        ]
+
+        current_resolved = self.persist_directory.resolve(strict=False)
+        for candidate in fallback_candidates:
+            if candidate.resolve(strict=False) == current_resolved:
+                continue
+            if self._probe_directory_writable(candidate):
+                logger.warning(
+                    "Switching vector persist directory to writable fallback: %s", candidate
+                )
+                self.persist_directory = candidate
+                return
+
+        raise VectorStoreError(
+            f"Failed to find writable vector persist directory. Current path: {self.persist_directory}"
+        )
+
+    def _allocate_recovery_directory(self) -> Path:
+        """Create a fresh writable directory to replace a poisoned readonly store."""
+        candidates = [
+            Path.home() / ".datachat" / "chroma_recovery",
+            Path(tempfile.gettempdir()) / "datachat_chroma_recovery",
+        ]
+        for base in candidates:
+            for _ in range(5):
+                candidate = base / f"{self.collection_name}_{uuid.uuid4().hex[:12]}"
+                if self._probe_directory_writable(candidate):
+                    return candidate
+        raise VectorStoreError("Failed to allocate writable vector recovery directory.")
+
+    def _truncate_document(self, text: str, datapoint_id: str) -> str:
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if len(normalized) <= self.max_document_chars:
+            return normalized
+        logger.warning(
+            "Truncating embedding payload for datapoint %s from %s to %s chars",
+            datapoint_id,
+            len(normalized),
+            self.max_document_chars,
+        )
+        return normalized[: self.max_document_chars]
+
+    def _clip_text(self, value: str, max_chars: int | None = None) -> str:
+        limit = max_chars if max_chars is not None else self.max_field_chars
+        return value if len(value) <= limit else f"{value[:limit]}..."
 
     async def search(
         self,
@@ -433,6 +551,41 @@ class VectorStore:
         )
         return any(marker in message for marker in recoverable_markers)
 
+    def _is_readonly_error(self, error: Exception) -> bool:
+        message = str(error).lower()
+        readonly_markers = (
+            "readonly",
+            "read-only",
+            "attempt to write a readonly database",
+            "permission denied",
+        )
+        return any(marker in message for marker in readonly_markers)
+
+    async def _recover_from_readonly_error(self) -> bool:
+        try:
+            await asyncio.to_thread(self._ensure_writable_persist_directory)
+            if await self._recover_from_storage_error():
+                return True
+            return await self._force_rotate_persist_directory()
+        except Exception as recovery_error:
+            logger.warning("Readonly recovery failed: %s", recovery_error)
+            return await self._force_rotate_persist_directory()
+
+    async def _force_rotate_persist_directory(self) -> bool:
+        """Switch to a fresh persistence location and rebuild collection."""
+        try:
+            next_dir = await asyncio.to_thread(self._allocate_recovery_directory)
+            logger.warning(
+                "Switching vector persistence from '%s' to fresh recovery dir '%s'",
+                self.persist_directory,
+                next_dir,
+            )
+            self.persist_directory = next_dir
+            return await self._recover_from_storage_error()
+        except Exception as rotation_error:
+            logger.warning("Vector recovery directory rotation failed: %s", rotation_error)
+            return False
+
     async def _recover_from_storage_error(self) -> bool:
         """
         Try to recover from broken/externally-reset vector persistence.
@@ -470,7 +623,8 @@ class VectorStore:
             loader = DataPointLoader()
             datapoints = loader.load_directory(datapoints_root, recursive=True, skip_errors=True)
             if datapoints:
-                await self.add_datapoints(datapoints)
+                unique_datapoints = list({dp.datapoint_id: dp for dp in datapoints}.values())
+                await self._upsert_datapoint_batches(unique_datapoints, batch_size=100)
                 logger.info(
                     "Rebuilt vector index from local datapoint files (%s).", len(datapoints)
                 )
@@ -499,14 +653,21 @@ class VectorStore:
 
         # Add type-specific fields
         if hasattr(datapoint, "business_purpose"):
-            parts.append(f"Purpose: {datapoint.business_purpose}")
+            parts.append(f"Purpose: {self._clip_text(str(datapoint.business_purpose))}")
         if hasattr(datapoint, "key_columns") and datapoint.key_columns:
             column_summaries = []
             for col in datapoint.key_columns[:12]:
                 meaning = col.business_meaning if col.business_meaning else ""
                 segment = f"{col.name} ({col.type})"
                 if meaning:
-                    segment = f"{segment}: {meaning}"
+                    segment = f"{segment}: {self._clip_text(str(meaning), 240)}"
+                if getattr(col, "sample_values", None):
+                    preview = ", ".join(
+                        self._clip_text(str(sample), 80)
+                        for sample in col.sample_values[:3]
+                    )
+                    if preview:
+                        segment = f"{segment} [samples: {preview}]"
                 column_summaries.append(segment)
             if column_summaries:
                 parts.append(f"Key Columns: {'; '.join(column_summaries)}")
@@ -517,18 +678,27 @@ class VectorStore:
             ]
             parts.append(f"Relationships: {'; '.join(rels)}")
         if hasattr(datapoint, "common_queries") and datapoint.common_queries:
-            parts.append(f"Common Queries: {'; '.join(datapoint.common_queries[:5])}")
+            parts.append(
+                "Common Queries: "
+                + "; ".join(self._clip_text(str(query), 320) for query in datapoint.common_queries[:5])
+            )
         if hasattr(datapoint, "gotchas") and datapoint.gotchas:
-            parts.append(f"Gotchas: {'; '.join(datapoint.gotchas[:5])}")
+            parts.append(
+                "Gotchas: "
+                + "; ".join(self._clip_text(str(note), 240) for note in datapoint.gotchas[:5])
+            )
 
         if hasattr(datapoint, "calculation"):
-            parts.append(f"Calculation: {datapoint.calculation}")
+            parts.append(f"Calculation: {self._clip_text(str(datapoint.calculation), 1200)}")
 
         if hasattr(datapoint, "synonyms") and datapoint.synonyms:
             parts.append(f"Synonyms: {', '.join(datapoint.synonyms)}")
 
         if hasattr(datapoint, "business_rules") and datapoint.business_rules:
-            parts.append(f"Rules: {'; '.join(datapoint.business_rules)}")
+            parts.append(
+                "Rules: "
+                + "; ".join(self._clip_text(str(rule), 240) for rule in datapoint.business_rules[:10])
+            )
 
         if hasattr(datapoint, "table_name"):
             parts.append(f"Table: {datapoint.table_name}")
@@ -543,9 +713,9 @@ class VectorStore:
             parts.append(f"Dependencies: {', '.join(datapoint.dependencies[:10])}")
 
         if hasattr(datapoint, "sql_template"):
-            parts.append(f"SQL Template: {datapoint.sql_template}")
+            parts.append(f"SQL Template: {self._clip_text(str(datapoint.sql_template), 1600)}")
         if hasattr(datapoint, "description") and datapoint.type == "Query":
-            parts.append(f"Query Description: {datapoint.description}")
+            parts.append(f"Query Description: {self._clip_text(str(datapoint.description), 500)}")
         if hasattr(datapoint, "parameters") and datapoint.parameters:
             param_list = [f"{name}: {p.type}" for name, p in datapoint.parameters.items()]
             parts.append(f"Parameters: {', '.join(param_list[:10])}")

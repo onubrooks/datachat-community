@@ -399,8 +399,59 @@ export interface DataPointSummary {
   datapoint_id: string;
   type: string;
   name?: string | null;
+  connection_id?: string | null;
+  scope?: string | null;
   source_tier?: string | null;
   source_path?: string | null;
+  lifecycle_version?: string | null;
+  lifecycle_reviewer?: string | null;
+  lifecycle_changed_by?: string | null;
+  lifecycle_changed_reason?: string | null;
+  lifecycle_changed_at?: string | null;
+}
+
+export interface RuntimeSettingsResponse {
+  target_database_url: string | null;
+  system_database_url: string | null;
+  llm_default_provider: string;
+  llm_openai_model: string | null;
+  llm_openai_model_mini: string | null;
+  llm_anthropic_model: string | null;
+  llm_anthropic_model_mini: string | null;
+  llm_google_model: string | null;
+  llm_google_model_mini: string | null;
+  llm_local_model: string | null;
+  llm_temperature: string | null;
+  database_credentials_key_present: boolean;
+  llm_openai_api_key_present: boolean;
+  llm_anthropic_api_key_present: boolean;
+  llm_google_api_key_present: boolean;
+  database_credentials_key_preview: string | null;
+  llm_openai_api_key_preview: string | null;
+  llm_anthropic_api_key_preview: string | null;
+  llm_google_api_key_preview: string | null;
+  source: Record<string, string>;
+  runtime_valid: boolean;
+  runtime_error: string | null;
+}
+
+export interface RuntimeSettingsUpdateRequest {
+  target_database_url?: string | null;
+  system_database_url?: string | null;
+  llm_default_provider?: string | null;
+  llm_openai_model?: string | null;
+  llm_openai_model_mini?: string | null;
+  llm_anthropic_model?: string | null;
+  llm_anthropic_model_mini?: string | null;
+  llm_google_model?: string | null;
+  llm_google_model_mini?: string | null;
+  llm_local_model?: string | null;
+  llm_temperature?: string | null;
+  database_credentials_key?: string | null;
+  llm_openai_api_key?: string | null;
+  llm_anthropic_api_key?: string | null;
+  llm_google_api_key?: string | null;
+  generate_database_credentials_key?: boolean;
 }
 
 export interface SyncStatusResponse {
@@ -529,6 +580,36 @@ export class DataChatAPI {
       throw new Error(message);
     }
 
+    return response.json();
+  }
+
+  async getSystemSettings(): Promise<RuntimeSettingsResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/system/settings`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  async updateSystemSettings(
+    payload: RuntimeSettingsUpdateRequest
+  ): Promise<RuntimeSettingsResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/system/settings`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      const message =
+        error.message || error.detail || response.statusText || `HTTP ${response.status}`;
+      throw new Error(message);
+    }
     return response.json();
   }
 
@@ -907,11 +988,13 @@ export class DataChatAPI {
   async triggerSync(payload?: {
     scope?: "auto" | "global" | "database";
     connection_id?: string | null;
+    conflict_mode?: "error" | "prefer_user" | "prefer_managed" | "prefer_latest";
   }): Promise<{ job_id: string }> {
     const body = payload
       ? {
           ...(payload.scope ? { scope: payload.scope } : {}),
           ...(payload.connection_id ? { connection_id: payload.connection_id } : {}),
+          ...(payload.conflict_mode ? { conflict_mode: payload.conflict_mode } : {}),
         }
       : undefined;
     const response = await fetch(`${this.baseUrl}/api/v1/sync`, {

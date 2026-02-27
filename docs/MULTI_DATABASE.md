@@ -28,6 +28,11 @@ print(Fernet.generate_key().decode())
 PY
 ```
 
+Important:
+- Keep `DATABASE_CREDENTIALS_KEY` stable after saving managed connections.
+- Changing this key invalidates previously encrypted connection URLs.
+- Current behavior: unreadable rows are skipped in list/default resolution so the API stays available, but those old rows must be recreated with the active key.
+
 ## Database Types (Registry Validation)
 
 Accepted today:

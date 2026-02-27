@@ -144,6 +144,36 @@ class TestPendingApprovalContracts:
         assert "Invalid DataPoint payload" in response.json()["detail"]
         store.update_pending_status.assert_not_awaited()
 
+    def test_approve_pending_does_not_mark_approved_when_vector_upsert_fails(self):
+        pending_id = uuid4()
+        pending = PendingDataPoint(
+            pending_id=pending_id,
+            profile_id=uuid4(),
+            datapoint=_valid_business_datapoint(),
+            confidence=0.9,
+            status="pending",
+            created_at=datetime.now(UTC),
+        )
+
+        store = AsyncMock()
+        store.list_pending.return_value = [pending]
+        store.update_pending_status = AsyncMock()
+        store.get_profile = AsyncMock(return_value=MagicMock(connection_id=uuid4()))
+        vector_store = AsyncMock()
+        vector_store.add_datapoints.side_effect = RuntimeError("embedding failed")
+        graph = MagicMock()
+
+        client = TestClient(app, raise_server_exceptions=False)
+        with (
+            patch("backend.api.routes.profiling._get_store", return_value=store),
+            patch("backend.api.routes.profiling._get_vector_store", return_value=vector_store),
+            patch("backend.api.routes.profiling._get_knowledge_graph", return_value=graph),
+        ):
+            response = client.post(f"/api/v1/datapoints/pending/{pending_id}/approve", json={})
+
+        assert response.status_code == 500
+        store.update_pending_status.assert_not_awaited()
+
     def test_bulk_approve_blocks_when_any_pending_contract_invalid(self, client):
         valid_pending = PendingDataPoint(
             pending_id=uuid4(),

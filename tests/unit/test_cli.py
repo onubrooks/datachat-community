@@ -461,6 +461,64 @@ class TestResetCommand:
             "DROP TABLE IF EXISTS users",
         ]
 
+    def test_reset_system_db_drops_non_datachat_tables(self, runner):
+        settings = self._make_settings()
+        system_connector = AsyncMock()
+        system_connector.connect = AsyncMock()
+        system_connector.execute = AsyncMock()
+        system_connector.close = AsyncMock()
+
+        with (
+            patch("backend.cli.apply_config_defaults"),
+            patch("backend.cli.get_settings", return_value=settings),
+            patch(
+                "backend.cli._resolve_system_database_url",
+                return_value=("postgresql://postgres:@localhost:5432/datachat", "settings"),
+            ),
+            patch("backend.cli._resolve_target_database_url", return_value=(None, "none")),
+            patch("backend.cli.PostgresConnector", return_value=system_connector),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "reset",
+                    "--yes",
+                    "--keep-vectors",
+                    "--keep-config",
+                    "--keep-managed-datapoints",
+                    "--keep-user-datapoints",
+                ],
+            )
+
+        assert result.exit_code == 0
+        executed = [call.args[0] for call in system_connector.execute.await_args_list]
+        assert any("DROP TABLE IF EXISTS public." in statement for statement in executed)
+        assert any("TRUNCATE TABLE public." in statement for statement in executed)
+
+    def test_reset_survives_invalid_runtime_settings(self, runner):
+        with (
+            patch("backend.cli.apply_config_defaults"),
+            patch("backend.cli.get_settings", side_effect=ValueError("invalid settings")),
+            patch("backend.cli.clear_settings_cache"),
+            patch("backend.cli._resolve_system_database_url", return_value=(None, "none")),
+            patch("backend.cli._resolve_target_database_url", return_value=(None, "none")),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "reset",
+                    "--yes",
+                    "--keep-vectors",
+                    "--keep-config",
+                    "--keep-managed-datapoints",
+                    "--keep-user-datapoints",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert "continuing reset with saved config fallbacks" in result.output.lower()
+        assert "Reset complete." in result.output
+
 
 class TestConnectCommand:
     """Test connect command."""
@@ -1001,6 +1059,22 @@ class TestCLIErrorHandling:
     @pytest.mark.asyncio
     async def test_cli_allows_live_schema_when_no_datapoints(self):
         """Ensure CLI allows live schema queries when DataPoints are missing."""
+        settings = type(
+            "Settings",
+            (),
+            {
+                "database": type(
+                    "DatabaseSettings",
+                    (),
+                    {
+                        "url": "postgresql://demo:pw@localhost:5432/datachat_demo",
+                        "pool_size": 10,
+                        "db_type": "postgresql",
+                    },
+                )(),
+                "system_database": type("SystemDatabaseSettings", (), {"url": None})(),
+            },
+        )()
         not_initialized = SystemStatus(
             is_initialized=False,
             has_databases=True,
@@ -1016,7 +1090,8 @@ class TestCLIErrorHandling:
                 with patch("backend.cli.PostgresConnector.connect", new=AsyncMock()):
                     with patch("backend.cli.bootstrap_knowledge_graph_from_datapoints"):
                         with patch("backend.cli.DataChatPipeline") as pipeline_cls:
-                            pipeline = await create_pipeline_from_config()
+                            with patch("backend.cli.get_settings", return_value=settings):
+                                pipeline = await create_pipeline_from_config()
                             assert pipeline is pipeline_cls.return_value
 
 

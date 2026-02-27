@@ -103,6 +103,92 @@ class TestDatabaseConnectionManager:
         assert results[0].database_url.get_secret_value() == database_url
 
     @pytest.mark.asyncio
+    async def test_list_connections_skips_unreadable_rows(self, encryption_key, pool):
+        manager = DatabaseConnectionManager(encryption_key=encryption_key, pool=pool)
+        readable_url = "postgresql://user:pass@localhost:5432/warehouse"
+        unreadable_cipher = Fernet(Fernet.generate_key())
+        pool.fetch.return_value = [
+            {
+                "connection_id": uuid4(),
+                "name": "Unreadable",
+                "database_url_encrypted": unreadable_cipher.encrypt(
+                    readable_url.encode("utf-8")
+                ).decode("utf-8"),
+                "database_type": "postgresql",
+                "is_active": True,
+                "is_default": True,
+                "tags": [],
+                "description": None,
+                "created_at": "2024-01-01T00:00:00Z",
+                "last_profiled": None,
+                "datapoint_count": 0,
+            },
+            {
+                "connection_id": uuid4(),
+                "name": "Readable",
+                "database_url_encrypted": manager._encrypt_url(readable_url),
+                "database_type": "postgresql",
+                "is_active": True,
+                "is_default": False,
+                "tags": [],
+                "description": None,
+                "created_at": "2024-01-02T00:00:00Z",
+                "last_profiled": None,
+                "datapoint_count": 0,
+            },
+        ]
+
+        results = await manager.list_connections()
+
+        assert len(results) == 1
+        assert results[0].name == "Readable"
+        assert results[0].database_url.get_secret_value() == readable_url
+
+    @pytest.mark.asyncio
+    async def test_get_default_connection_falls_back_when_default_unreadable(
+        self, encryption_key, pool
+    ):
+        manager = DatabaseConnectionManager(encryption_key=encryption_key, pool=pool)
+        fallback_url = "postgresql://user:pass@localhost:5432/fallback"
+        unreadable_cipher = Fernet(Fernet.generate_key())
+        pool.fetch.return_value = [
+            {
+                "connection_id": uuid4(),
+                "name": "Unreadable Default",
+                "database_url_encrypted": unreadable_cipher.encrypt(
+                    fallback_url.encode("utf-8")
+                ).decode("utf-8"),
+                "database_type": "postgresql",
+                "is_active": True,
+                "is_default": True,
+                "tags": [],
+                "description": None,
+                "created_at": "2024-01-03T00:00:00Z",
+                "last_profiled": None,
+                "datapoint_count": 0,
+            },
+            {
+                "connection_id": uuid4(),
+                "name": "Readable Fallback",
+                "database_url_encrypted": manager._encrypt_url(fallback_url),
+                "database_type": "postgresql",
+                "is_active": True,
+                "is_default": False,
+                "tags": [],
+                "description": None,
+                "created_at": "2024-01-02T00:00:00Z",
+                "last_profiled": None,
+                "datapoint_count": 0,
+            },
+        ]
+
+        result = await manager.get_default_connection()
+
+        assert result is not None
+        assert result.name == "Readable Fallback"
+        assert result.database_url.get_secret_value() == fallback_url
+
+    @pytest.mark.asyncio
     async def test_set_default_updates_flags(self, encryption_key, pool):
         manager = DatabaseConnectionManager(encryption_key=encryption_key, pool=pool)
         conn = self._build_conn(pool)

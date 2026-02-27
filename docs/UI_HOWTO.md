@@ -16,12 +16,14 @@ This guide explains how to use the web UI features that are implemented today, i
 
 ## 2. First-Time Setup (if prompted)
 
-If the system is not initialized, the chat page shows a setup card.
+If the system is not initialized, the chat page shows a wizard-first setup card.
 
-1. Enter your target `DATABASE_URL`.
-2. Optionally enter a system database URL.
-3. Submit setup.
-4. After setup, go to **Manage DataPoints** to profile/generate/sync.
+1. Click **Start Onboarding Wizard**.
+2. Complete guided steps (connect, profile, generate, approve, sync).
+3. Return to chat and ask your first question.
+
+Optional:
+- Use **Advanced manual setup** only when you need direct URL initialization.
 
 ---
 
@@ -130,6 +132,7 @@ On the right sidebar:
 4. Click **Use In Query** from schema rows:
    - In Ask mode: inserts a natural-language prompt.
    - In SQL mode: inserts a SQL starter query.
+5. Click **Add Datapoint** in Metadata to open create-only training flow directly from the sidebar.
 
 ---
 
@@ -201,6 +204,27 @@ Storage and usage:
 - If no system database is configured, feedback is captured in API logs as structured payloads.
 - Teams can use this data to prioritize DataPoint fixes, tune prompts, and validate retrieval quality.
 
+### 15.1 Train DataChat from a Bad Answer
+
+When a response includes SQL, use the in-message **Train DataChat** action to create or update a managed Query DataPoint from that result:
+
+1. Click **Train DataChat** on the assistant response.
+2. Choose **Create New** or **Update Existing**.
+   In update mode, use the training history list (with search and last-updated labels) to pick the datapoint to revise.
+3. Confirm/edit question context and SQL template.
+4. Add optional notes and related tables.
+5. Click **Save, Sync, and Retry** (or **Update, Sync, and Retry**).
+
+Current behavior:
+
+- The training flow supports managed **Query** DataPoints.
+- The datapoint is saved through the managed DataPoint API, then a sync is triggered with `prefer_latest` conflict handling.
+- After sync completes, the original question is re-run so retrieval can use the updated artifact immediately.
+
+Planned extension:
+
+- Add training targets for **Business**, **Schema**, and **Process** DataPoint types using the same guided loop.
+
 ---
 
 ## 16. Tool Approval Modal
@@ -238,6 +262,12 @@ Use the guided sequence:
 
 Status dots/checkmarks show step state (`done`, `ready`, `blocked`).
 
+Wizard behavior:
+- Click **Start Guided Wizard** in the Quickstart tab.
+- Step 1 now accepts connection details directly in the modal (name, URL, type, default flag).
+- On successful connection validation, the wizard automatically advances to profiling.
+- Long-running steps (profile/generate/sync) show live in-modal progress.
+
 ### 18.2 Add/Edit/Delete Connections
 
 1. Add connection with name, URL, type, and optional description.
@@ -256,12 +286,23 @@ Note:
 4. Select table subset and generation depth.
 5. Start DataPoint generation.
 
+Action difference:
+- **Generate DataPoints**: uses the latest existing profile for the selected connection. It does not rerun profiling.
+- **Profile + Generate (tool)**: runs a new profile first, then generates DataPoints from that fresh profile.
+- Use **Generate DataPoints** when profile results are already fresh.
+- Use **Profile + Generate (tool)** when schema/data changed or for first-time setup.
+
 ### 18.4 Review Pending DataPoints
 
 1. Open pending list.
 2. Expand an item to inspect/edit JSON draft.
 3. Approve or reject individual items.
 4. Use **Bulk approve** when ready.
+
+Metadata explorer note:
+- In Chat (`/`), switch right sidebar to **Metadata**.
+- Pending, approved, and managed metadata items are listed separately.
+- Click an item to open **Metadata Detail** with description, business purpose, SQL template, and raw JSON payload.
 
 ### 18.5 Sync Retrieval Index
 
@@ -300,6 +341,8 @@ Open **Settings** from the header to configure:
 - Show/hide agent timing breakdown
 - Simple SQL synthesis toggle
 - Theme mode (`Light`, `Dark`, `System`)
+- Runtime database settings (target/system DB URLs, credentials key)
+- Runtime LLM settings (default provider, model fields, API keys)
 
 ---
 

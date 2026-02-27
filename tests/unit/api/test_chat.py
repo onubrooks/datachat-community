@@ -100,6 +100,17 @@ class TestChatEndpoint:
             setup_required=[],
         )
 
+    @pytest.fixture
+    def uninitialized_status(self):
+        """Mock setup-required status (no usable database yet)."""
+        return SystemStatus(
+            is_initialized=False,
+            has_databases=False,
+            has_system_database=True,
+            has_datapoints=False,
+            setup_required=[],
+        )
+
     @pytest.mark.asyncio
     async def test_chat_returns_200_for_valid_query(
         self, client, mock_pipeline_result, initialized_status
@@ -652,6 +663,72 @@ class TestChatEndpoint:
         payload = response.json()
         assert payload["visualization_hint"] == "line_chart"
         assert payload["visualization_metadata"]["deterministic"] == "line_chart"
+
+    @pytest.mark.asyncio
+    async def test_chat_lazy_initializes_pipeline_with_resolved_database_context(
+        self, client, mock_pipeline_result, uninitialized_status
+    ):
+        connector = AsyncMock()
+        connector.connect = AsyncMock(return_value=None)
+        mock_pipeline = AsyncMock()
+        mock_pipeline.run = AsyncMock(return_value=mock_pipeline_result)
+        app_state = {
+            "pipeline": None,
+            "database_manager": None,
+            "vector_store": object(),
+            "knowledge_graph": object(),
+        }
+
+        with (
+            patch(
+                "backend.api.routes.chat.SystemInitializer.status",
+                new=AsyncMock(return_value=uninitialized_status),
+            ),
+            patch(
+                "backend.api.routes.chat.resolve_database_type_and_url",
+                new=AsyncMock(
+                    return_value=("postgresql", "postgresql://user:pass@localhost:5432/db")
+                ),
+            ),
+            patch("backend.api.routes.chat.create_connector", return_value=connector),
+            patch("backend.api.routes.chat.DataChatPipeline", return_value=mock_pipeline),
+            patch("backend.api.main.app_state", app_state),
+        ):
+            response = client.post(
+                "/api/v1/chat",
+                json={"message": "show total revenue"},
+            )
+
+        assert response.status_code == 200
+        connector.connect.assert_awaited_once()
+        mock_pipeline.run.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_chat_returns_setup_error_when_database_context_missing(
+        self, client, uninitialized_status
+    ):
+        with (
+            patch(
+                "backend.api.routes.chat.SystemInitializer.status",
+                new=AsyncMock(return_value=uninitialized_status),
+            ),
+            patch(
+                "backend.api.routes.chat.resolve_database_type_and_url",
+                new=AsyncMock(return_value=(None, None)),
+            ),
+            patch(
+                "backend.api.main.app_state",
+                {"pipeline": None, "database_manager": None},
+            ),
+        ):
+            response = client.post(
+                "/api/v1/chat",
+                json={"message": "show total revenue"},
+            )
+
+        assert response.status_code == 400
+        payload = response.json()
+        assert payload["error"] == "system_not_initialized"
 
     @pytest.mark.asyncio
     async def test_chat_infers_answer_source_and_confidence_defaults(

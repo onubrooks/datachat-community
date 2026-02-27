@@ -85,6 +85,8 @@ async def test_generates_schema_datapoints_from_profile():
     assert datapoint["metadata"]["connection_id"] == str(profile.connection_id)
     assert datapoint["metadata"]["semantic_role"] == "fact_event"
     assert "display_hints" in datapoint["metadata"]
+    order_id_column = next(col for col in datapoint["key_columns"] if col["name"] == "order_id")
+    assert order_id_column["sample_values"] == ["1", "2"]
 
 
 @pytest.mark.asyncio
@@ -170,3 +172,16 @@ async def test_skips_failed_tables_in_partial_profiles():
     schema_table_names = [item.datapoint.get("table_name") for item in generated.schema_datapoints]
     assert "public.orders" in schema_table_names
     assert "public.broken_table" not in schema_table_names
+
+
+@pytest.mark.asyncio
+async def test_negative_row_count_is_sanitized_for_schema_datapoints():
+    profile = _sample_profile()
+    profile.tables[0].row_count = -1
+
+    generator = DataPointGenerator(llm_provider=FakeLLM([]))
+    generated = await generator.generate_from_profile(profile, depth="metrics_basic")
+
+    assert generated.schema_datapoints
+    datapoint = generated.schema_datapoints[0].datapoint
+    assert datapoint.get("row_count") is None
