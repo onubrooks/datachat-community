@@ -344,6 +344,8 @@ Open **Settings** from the header to configure:
 - Runtime database settings (target/system DB URLs, credentials key)
 - Runtime LLM settings (default provider, model fields, API keys)
 
+Important: Chroma embeddings currently depend on OpenAI embeddings. Set `LLM_OPENAI_API_KEY` in Runtime LLM settings even if the default chat provider is not OpenAI.
+
 ---
 
 ## 20. Error Recovery
