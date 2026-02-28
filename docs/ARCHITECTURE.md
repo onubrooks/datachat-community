@@ -73,6 +73,11 @@ This flow avoids requiring manual DataPoint authoring before first value.
 
 The next public enhancements should focus on retrieval quality and DataPoint lifecycle, not feature breadth.
 
+### 5.0 Document Context Scope (Community vs Enterprise)
+
+- Community V1 (public roadmap): local document sources (folders, PDFs, websites), document indexing, and cited retrieval in answers.
+- Enterprise/private V2+: remote connectors (Confluence, Drive, S3), sync operations, ACL retrieval, and doc-data linking.
+
 ### 5.1 Retrieval Explainability Surface
 
 - Add a retrieval-debug view (UI and API) showing:

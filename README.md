@@ -43,6 +43,14 @@ Catalog/profiling SQL templates exist for additional engines (BigQuery, Redshift
 - Retrieval explainability views (why a DataPoint was selected).
 - Better onboarding metadata generation quality.
 - Retrieval evaluation and datapoint quality tooling (inspect retrieved context, label quality, and improve metadata loops).
+- Document Context V1: local folder/PDF/website ingestion + cited document retrieval in answers.
+
+## Community vs Enterprise Document Context
+
+- Community roadmap includes Document Context V1 (local sources and citations).
+- Enterprise/private roadmap extends this with:
+  - V2: Confluence/Google Drive/S3 connectors + sync operations.
+  - V3: ACL-aware retrieval, doc-data linking, and feedback reranking.
 
 ---
 
