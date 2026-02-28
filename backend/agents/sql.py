@@ -316,6 +316,17 @@ class SQLAgent(BaseAgent):
                 # Still return the best attempt we have, but mark needs_clarification
                 needs_clarification = True
             else:
+                if not generated_sql.clarifying_questions:
+                    guarded_sql = self._apply_context_accuracy_guards(generated_sql, input)
+                    if guarded_sql.sql != generated_sql.sql:
+                        guard_issues = self._validate_sql(guarded_sql, input)
+                        if guard_issues:
+                            logger.warning(
+                                "Skipped context-accuracy SQL rewrite due to validation issues",
+                                extra={"issues": [issue.message for issue in guard_issues]},
+                            )
+                        else:
+                            generated_sql = guarded_sql
                 needs_clarification = bool(generated_sql.clarifying_questions)
 
             logger.info(
@@ -3899,3 +3910,285 @@ class SQLAgent(BaseAgent):
             sql = sql.replace(placeholder, formatted_value)
 
         return sql
+
+    def _apply_context_accuracy_guards(
+        self, generated_sql: GeneratedSQL, input: SQLAgentInput
+    ) -> GeneratedSQL:
+        sql_text = (generated_sql.sql or "").strip()
+        if not sql_text:
+            return generated_sql
+
+        sample_map = self._collect_profile_sample_values(input)
+        if not sample_map:
+            return generated_sql
+
+        rewritten_sql, rewrite_notes = self._rewrite_sql_enum_literals(sql_text, sample_map)
+        if rewritten_sql == sql_text or not rewrite_notes:
+            return generated_sql
+
+        assumptions = list(generated_sql.assumptions or [])
+        for note in rewrite_notes:
+            if note not in assumptions:
+                assumptions.append(note)
+        return generated_sql.model_copy(update={"sql": rewritten_sql, "assumptions": assumptions})
+
+    def _collect_profile_sample_values(
+        self, input: SQLAgentInput
+    ) -> dict[str, dict[str, list[str]]]:
+        collected: dict[str, dict[str, list[str]]] = {}
+
+        db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
+        db_url = input.database_url or (
+            str(self.config.database.url) if getattr(self.config.database, "url", None) else None
+        )
+        if db_url:
+            snapshot = load_profile_cache(database_type=db_type, database_url=db_url)
+            table_entries = snapshot.get("tables") if isinstance(snapshot, dict) else None
+            if isinstance(table_entries, list):
+                for entry in table_entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    table_name = self._normalize_table_name(entry.get("name"))
+                    if not table_name:
+                        continue
+                    columns = entry.get("columns")
+                    if not isinstance(columns, list):
+                        continue
+                    table_bucket = collected.setdefault(table_name, {})
+                    for column in columns:
+                        if not isinstance(column, dict):
+                            continue
+                        column_name = str(column.get("name") or "").strip().lower()
+                        if not column_name:
+                            continue
+                        samples = [
+                            str(value).strip()
+                            for value in self._coerce_string_list(column.get("sample_values", []))
+                            if str(value).strip()
+                        ]
+                        if not samples:
+                            continue
+                        existing = table_bucket.setdefault(column_name, [])
+                        for sample in samples:
+                            if sample not in existing:
+                                existing.append(sample)
+
+        datapoints = getattr(input.investigation_memory, "datapoints", []) or []
+        for datapoint in datapoints:
+            if getattr(datapoint, "datapoint_type", None) != "Schema":
+                continue
+            metadata = datapoint.metadata if isinstance(datapoint.metadata, dict) else {}
+            table_candidates: list[str] = []
+            primary_table = metadata.get("table_name") or metadata.get("table")
+            if isinstance(primary_table, str) and primary_table.strip():
+                table_candidates.append(primary_table.strip())
+            table_candidates.extend(self._coerce_string_list(metadata.get("related_tables")))
+            normalized_tables = [
+                self._normalize_table_name(table_name)
+                for table_name in table_candidates
+                if self._normalize_table_name(table_name)
+            ]
+            if not normalized_tables:
+                continue
+            key_columns = metadata.get("key_columns") or metadata.get("columns") or []
+            if not isinstance(key_columns, list):
+                continue
+            for column in key_columns:
+                if not isinstance(column, dict):
+                    continue
+                column_name = str(column.get("name") or column.get("column_name") or "").strip().lower()
+                if not column_name:
+                    continue
+                samples = [
+                    str(value).strip()
+                    for value in self._coerce_string_list(column.get("sample_values", []))
+                    if str(value).strip()
+                ]
+                if not samples:
+                    continue
+                for table_name in normalized_tables:
+                    table_bucket = collected.setdefault(table_name, {})
+                    existing = table_bucket.setdefault(column_name, [])
+                    for sample in samples:
+                        if sample not in existing:
+                            existing.append(sample)
+
+        return collected
+
+    def _rewrite_sql_enum_literals(
+        self,
+        sql_text: str,
+        sample_map: dict[str, dict[str, list[str]]],
+    ) -> tuple[str, list[str]]:
+        alias_map = self._extract_table_aliases(sql_text)
+        rewritten_parts: list[str] = []
+        assumptions: list[str] = []
+        cursor = 0
+        pattern = re.compile(
+            r"(?P<left>(?:[a-zA-Z_][\w]*\.)?[a-zA-Z_][\w]*)\s*=\s*'(?P<value>(?:''|[^'])*)'",
+            re.IGNORECASE,
+        )
+
+        for match in pattern.finditer(sql_text):
+            left = str(match.group("left") or "").strip()
+            raw_value = str(match.group("value") or "")
+            literal = raw_value.replace("''", "'").strip()
+            samples, column_name = self._resolve_column_samples(left, sample_map, alias_map)
+            if not samples:
+                continue
+            replacement = self._map_literal_to_observed_sample(literal, samples)
+            if not replacement or replacement == literal:
+                continue
+            replacement_literal = replacement.replace("'", "''")
+            rewritten_parts.append(sql_text[cursor : match.start("value")])
+            rewritten_parts.append(replacement_literal)
+            cursor = match.end("value")
+            assumptions.append(
+                f"Mapped filter {column_name}='{literal}' to observed value '{replacement}' using profiled samples."
+            )
+
+        if cursor == 0:
+            return sql_text, []
+        rewritten_parts.append(sql_text[cursor:])
+        return "".join(rewritten_parts), assumptions
+
+    def _resolve_column_samples(
+        self,
+        identifier: str,
+        sample_map: dict[str, dict[str, list[str]]],
+        alias_map: dict[str, str],
+    ) -> tuple[list[str], str]:
+        column_name = identifier.strip()
+        if "." in column_name:
+            table_or_alias, column = column_name.split(".", 1)
+            normalized_column = column.strip().lower()
+            normalized_table = alias_map.get(
+                table_or_alias.strip().lower(),
+                self._normalize_table_name(table_or_alias),
+            )
+            if normalized_table and normalized_column:
+                table_values = sample_map.get(normalized_table, {})
+                samples = table_values.get(normalized_column, [])
+                if samples:
+                    return samples, normalized_column
+            return [], normalized_column
+
+        normalized_column = column_name.lower()
+        merged: list[str] = []
+        for table_values in sample_map.values():
+            samples = table_values.get(normalized_column, [])
+            for sample in samples:
+                if sample not in merged:
+                    merged.append(sample)
+        return merged, normalized_column
+
+    def _extract_table_aliases(self, sql_text: str) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        reserved_aliases = {
+            "where",
+            "join",
+            "left",
+            "right",
+            "full",
+            "inner",
+            "outer",
+            "cross",
+            "on",
+            "using",
+            "group",
+            "order",
+            "limit",
+            "union",
+            "having",
+        }
+        pattern = re.compile(
+            r"\b(?:from|join)\s+([`\"\[\]a-zA-Z0-9_.]+)(?:\s+(?:as\s+)?([a-zA-Z_][\w]*))?",
+            re.IGNORECASE,
+        )
+        for match in pattern.finditer(sql_text):
+            raw_table = str(match.group(1) or "").strip()
+            normalized_table = self._normalize_table_name(raw_table)
+            if not normalized_table:
+                continue
+            bare_table = normalized_table.split(".")[-1]
+            aliases[bare_table] = normalized_table
+            alias = str(match.group(2) or "").strip().lower()
+            if alias and alias not in reserved_aliases:
+                aliases[alias] = normalized_table
+        return aliases
+
+    @staticmethod
+    def _normalize_table_name(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        table_name = value.strip()
+        if not table_name:
+            return ""
+        cleaned = table_name.replace("`", "").replace('"', "")
+        cleaned = cleaned.replace("[", "").replace("]", "")
+        return cleaned.strip().lower()
+
+    def _map_literal_to_observed_sample(self, literal: str, samples: list[str]) -> str | None:
+        if not literal or not samples:
+            return None
+        normalized_literal = self._normalize_token(literal)
+        if not normalized_literal:
+            return None
+
+        sample_lookup = {self._normalize_token(sample): sample for sample in samples if sample}
+        if normalized_literal in sample_lookup:
+            return sample_lookup[normalized_literal]
+
+        literal_polarity = self._classify_polarity(normalized_literal)
+        if literal_polarity is None:
+            return None
+
+        for sample in samples:
+            normalized_sample = self._normalize_token(sample)
+            if self._classify_polarity(normalized_sample) == literal_polarity:
+                return sample
+        return None
+
+    @staticmethod
+    def _normalize_token(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+    def _classify_polarity(self, normalized_token: str) -> str | None:
+        if not normalized_token:
+            return None
+        positive_tokens = {
+            "positive",
+            "pos",
+            "up",
+            "thumbs_up",
+            "good",
+            "yes",
+            "true",
+            "pass",
+            "passed",
+            "approved",
+            "active",
+            "success",
+            "completed",
+        }
+        negative_tokens = {
+            "negative",
+            "neg",
+            "down",
+            "thumbs_down",
+            "bad",
+            "no",
+            "false",
+            "fail",
+            "failed",
+            "declined",
+            "rejected",
+            "inactive",
+            "cancelled",
+            "canceled",
+        }
+        if normalized_token in positive_tokens:
+            return "positive"
+        if normalized_token in negative_tokens:
+            return "negative"
+        return None

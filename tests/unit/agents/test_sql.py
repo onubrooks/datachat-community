@@ -1438,6 +1438,81 @@ class TestDatabaseContext:
         assert "sentiment" in selected
         assert selected.index("sentiment") < selected.index("score")
 
+    def test_context_accuracy_guard_maps_polarity_literal_to_profile_samples(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={
+                "query": "How many positive feedbacks do we have?",
+                "database_url": "postgresql://demo:demo@localhost:5432/warehouse",
+            }
+        )
+        generated = GeneratedSQL(
+            sql="SELECT COUNT(*) FROM public.ui_feedback WHERE sentiment = 'positive'",
+            explanation="Count positive feedback records",
+            used_datapoints=[],
+            confidence=0.7,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+        with patch(
+            "backend.agents.sql.load_profile_cache",
+            return_value={
+                "tables": [
+                    {
+                        "name": "public.ui_feedback",
+                        "columns": [
+                            {
+                                "name": "sentiment",
+                                "sample_values": ["up", "down"],
+                            }
+                        ],
+                    }
+                ]
+            },
+        ):
+            rewritten = sql_agent._apply_context_accuracy_guards(generated, sql_input)
+
+        assert "sentiment = 'up'" in rewritten.sql
+        assert any("Mapped filter sentiment='positive'" in item for item in rewritten.assumptions)
+
+    def test_context_accuracy_guard_keeps_sql_when_literal_is_observed(
+        self, sql_agent, sample_sql_agent_input
+    ):
+        sql_input = sample_sql_agent_input.model_copy(
+            update={"database_url": "postgresql://demo:demo@localhost:5432/warehouse"}
+        )
+        generated = GeneratedSQL(
+            sql="SELECT COUNT(*) FROM public.ui_feedback WHERE sentiment = 'up'",
+            explanation="Count thumbs-up feedback records",
+            used_datapoints=[],
+            confidence=0.8,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+
+        with patch(
+            "backend.agents.sql.load_profile_cache",
+            return_value={
+                "tables": [
+                    {
+                        "name": "public.ui_feedback",
+                        "columns": [
+                            {
+                                "name": "sentiment",
+                                "sample_values": ["up", "down"],
+                            }
+                        ],
+                    }
+                ]
+            },
+        ):
+            rewritten = sql_agent._apply_context_accuracy_guards(generated, sql_input)
+
+        assert rewritten.sql == generated.sql
+        assert rewritten.assumptions == generated.assumptions
+
     def test_build_semantic_rows_deterministic_classifies_table(self, sql_agent):
         rows = sql_agent._build_semantic_rows_deterministic(
             columns_by_table={
