@@ -40,18 +40,23 @@ def _sample_profile():
                 data_type="integer",
                 nullable=False,
                 sample_values=["1", "2"],
+                distinct_count=100,
             ),
             ColumnProfile(
                 name="total_amount",
                 data_type="numeric",
                 nullable=False,
                 sample_values=["10.5", "20.0"],
+                distinct_count=87,
+                min_value="10.5",
+                max_value="20.0",
             ),
             ColumnProfile(
                 name="created_at",
                 data_type="timestamp",
                 nullable=False,
                 sample_values=["2024-01-01"],
+                distinct_count=100,
             ),
         ],
         relationships=[],
@@ -85,8 +90,13 @@ async def test_generates_schema_datapoints_from_profile():
     assert datapoint["metadata"]["connection_id"] == str(profile.connection_id)
     assert datapoint["metadata"]["semantic_role"] == "fact_event"
     assert "display_hints" in datapoint["metadata"]
+    assert datapoint["metadata"]["grain"] == "row-level"
+    assert datapoint["metadata"]["exclusions"]
+    assert datapoint["metadata"]["confidence_notes"]
+    assert datapoint["metadata"]["profiled_columns"]
     order_id_column = next(col for col in datapoint["key_columns"] if col["name"] == "order_id")
     assert order_id_column["sample_values"] == ["1", "2"]
+    assert order_id_column["distinct_count"] == 100
 
 
 @pytest.mark.asyncio
@@ -109,6 +119,9 @@ async def test_suggests_metrics_from_numeric_columns():
     assert metric["metadata"]["connection_id"] == str(profile.connection_id)
     assert metric["metadata"]["metric_kind"] == "additive_measure"
     assert metric["metadata"]["default_visualization"] in {"line", "bar", "kpi", "table"}
+    assert metric["metadata"]["grain"] == "table-level"
+    assert metric["metadata"]["exclusions"]
+    assert metric["metadata"]["confidence_notes"]
 
 
 @pytest.mark.asyncio
@@ -185,3 +198,55 @@ async def test_negative_row_count_is_sanitized_for_schema_datapoints():
     assert generated.schema_datapoints
     datapoint = generated.schema_datapoints[0].datapoint
     assert datapoint.get("row_count") is None
+
+
+def test_schema_prompt_includes_profile_stats():
+    profile = _sample_profile()
+    generator = DataPointGenerator(llm_provider=FakeLLM([]))
+
+    prompt = generator._build_schema_prompt(profile.tables[0])
+
+    assert "distinct_count" in prompt
+    assert "min_value" in prompt
+    assert "max_value" in prompt
+
+
+def test_metric_prompt_includes_distinct_and_samples():
+    profile = _sample_profile()
+    table = profile.tables[0]
+    numeric_columns = [column for column in table.columns if "numeric" in column.data_type]
+    generator = DataPointGenerator(llm_provider=FakeLLM([]))
+
+    prompt = generator._build_metric_prompt(table, numeric_columns)
+
+    assert "distinct_count" in prompt
+    assert "sample_values" in prompt
+
+
+def test_derive_table_purpose_is_useful_for_non_finance_domain():
+    table = TableProfile(
+        schema="public",
+        name="support_tickets",
+        row_count=42,
+        columns=[
+            ColumnProfile(
+                name="ticket_id",
+                data_type="integer",
+                nullable=False,
+                sample_values=["1001", "1002"],
+            ),
+            ColumnProfile(
+                name="ticket_status",
+                data_type="text",
+                nullable=False,
+                sample_values=["open", "closed"],
+            ),
+        ],
+        relationships=[],
+        sample_size=2,
+    )
+    generator = DataPointGenerator(llm_provider=FakeLLM([]))
+
+    purpose = generator._derive_table_purpose(table)
+
+    assert "support cases" in purpose.lower()
