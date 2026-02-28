@@ -111,7 +111,8 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
                     "error": "system_not_initialized",
                     "message": (
                         "DataChat requires a target database connection. "
-                        "Run 'datachat setup' or 'datachat demo' to get started."
+                        "Start the onboarding wizard in the UI (Databases -> Start Onboarding Wizard) "
+                        "or run `datachat onboarding wizard` in the CLI."
                     ),
                     "setup_steps": [
                         {

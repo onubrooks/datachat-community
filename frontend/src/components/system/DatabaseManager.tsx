@@ -197,6 +197,7 @@ export function DatabaseManager() {
   const [activeGenerationProfileId, setActiveGenerationProfileId] = useState<string | null>(null);
   const [activeGenerationJobId, setActiveGenerationJobId] = useState<string | null>(null);
   const generationFallbackJobRef = useRef<GenerationJob | null>(null);
+  const reportedGenerationFailureRef = useRef<string | null>(null);
   const addConnectionRef = useRef<HTMLDivElement | null>(null);
   const previousGenerationStateRef = useRef<{ jobId: string; status: string } | null>(null);
 
@@ -318,7 +319,7 @@ export function DatabaseManager() {
     selectedConnectionPreview && !isEnvironmentConnection(selectedConnectionPreview)
       ? selectedConnectionPreview.connection_id
       : null;
-  const shouldFetchMetadataLists = Boolean(selectedManagedConnectionId) && !activeGenerationJobId;
+  const shouldFetchMetadataLists = Boolean(selectedManagedConnectionId);
 
   const profilingJobQuery = useQuery({
     queryKey: ["profiling-job-latest", selectedManagedConnectionId],
@@ -404,6 +405,9 @@ export function DatabaseManager() {
     },
     enabled: Boolean(activeGenerationJobId || generationProfileId),
     refetchInterval: (query) => {
+      if (jobs.generating) {
+        return false;
+      }
       const generation = query.state.data as GenerationJob | null | undefined;
       if (!generation) {
         return activeGenerationJobId ? 3000 : false;
@@ -500,6 +504,57 @@ export function DatabaseManager() {
       current === generationJob.profile_id ? null : current
     );
   }, [generationJob]);
+
+  useEffect(() => {
+    if (!generationJob || generationJob.status !== "failed") {
+      return;
+    }
+    if (reportedGenerationFailureRef.current === generationJob.job_id) {
+      return;
+    }
+    reportedGenerationFailureRef.current = generationJob.job_id;
+    setError(generationJob.error || "Metadata generation failed.");
+  }, [generationJob]);
+
+  const waitForGenerationTerminal = useCallback(
+    async (jobId: string, profileId: string): Promise<GenerationJob> => {
+      const startedAt = Date.now();
+      const timeoutMs = 10 * 60 * 1000;
+      const pollMs = 1500;
+      let lastSeen: GenerationJob | null = null;
+
+      while (Date.now() - startedAt < timeoutMs) {
+        let latest: GenerationJob | null = null;
+        try {
+          latest = await api.getGenerationJob(jobId);
+        } catch (err) {
+          try {
+            latest = await api.getLatestGenerationJob(profileId);
+          } catch {
+            if (lastSeen && !isJobInProgress(lastSeen.status)) {
+              return lastSeen;
+            }
+            throw err;
+          }
+        }
+
+        if (latest) {
+          lastSeen = latest;
+          queryClient.setQueryData(["generation-latest", profileId], latest);
+          queryClient.setQueryData(["generation-job", jobId, profileId], latest);
+          generationFallbackJobRef.current = latest;
+          if (!isJobInProgress(latest.status)) {
+            return latest;
+          }
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+      }
+
+      throw new Error("Metadata generation timed out. Retry with fewer tables or smaller batch size.");
+    },
+    [queryClient]
+  );
 
   const handleToolProfile = async () => {
     setToolApprovalOpen(true);
@@ -792,6 +847,20 @@ export function DatabaseManager() {
       setActiveGenerationProfileId(profileId);
       setActiveGenerationJobId(generation.job_id);
       generationFallbackJobRef.current = generation;
+      const terminalJob = await waitForGenerationTerminal(generation.job_id, profileId);
+      queryClient.setQueryData(["generation-latest", profileId], terminalJob);
+      queryClient.setQueryData(["generation-job", terminalJob.job_id, profileId], terminalJob);
+      generationFallbackJobRef.current = terminalJob;
+      if (terminalJob.status === "failed") {
+        setError(terminalJob.error || "Metadata generation failed.");
+        return false;
+      }
+      setActiveGenerationJobId((current) =>
+        current === generation.job_id ? null : current
+      );
+      setActiveGenerationProfileId((current) =>
+        current === profileId ? null : current
+      );
       await invalidateManagerQueries();
       return true;
     } catch (err) {
