@@ -14,3 +14,11 @@ chroma_data/
 datapoints/managed/
 *.log
 manual_testing.txt
+
+# Local generated artifacts
+metadata/
+preprocessed_configs/
+reports/onboarding_wizard_*.md
+reports/onboarding_wizard_*.json
+status
+uuid
