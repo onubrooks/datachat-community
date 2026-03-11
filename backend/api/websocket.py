@@ -256,7 +256,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     "error": "system_not_initialized",
                     "message": (
                         "DataChat requires a target database connection. "
-                        "Run 'datachat setup' or 'datachat demo' to get started."
+                        "Start the onboarding wizard in the UI (Databases -> Start Onboarding Wizard) "
+                        "or run `datachat onboarding wizard` in the CLI."
                     ),
                     "setup_steps": [
                         {
