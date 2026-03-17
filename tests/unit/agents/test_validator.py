@@ -255,6 +255,25 @@ class TestValidatorAgent:
             for e in result.validated_sql.errors
         )
 
+
+    @pytest.mark.asyncio
+    async def test_multiline_block_comment_injection_detected(self, validator_agent, sample_input):
+        """Test that multiline block comment injection is detected."""
+        comment_sql = GeneratedSQL(
+            sql="SELECT customer_id FROM analytics.fact_sales /* hidden\n            payload */ WHERE date >= '2024-01-01'",
+            explanation="Multiline comment injection",
+            used_datapoints=["table_fact_sales_001"],
+            confidence=0.5,
+            assumptions=[],
+            clarifying_questions=[],
+        )
+        sample_input.generated_sql = comment_sql
+
+        result = await validator_agent.execute(sample_input)
+
+        assert result.validated_sql.is_safe is False
+        assert any(e.error_type == "security" for e in result.validated_sql.errors)
+
     @pytest.mark.asyncio
     async def test_cte_with_delete_rejected(self, validator_agent, sample_input):
         """Test that CTE followed by DELETE is rejected (security issue)."""
