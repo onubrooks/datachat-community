@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DataChatAPI, type QualitySummaryResponse } from "@/lib/api";
@@ -74,12 +72,6 @@ export default function QualityPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button asChild variant="secondary">
-              <Link href="/runs">Runs</Link>
-            </Button>
-            <Button asChild variant="secondary">
-              <Link href="/monitoring">Monitoring</Link>
-            </Button>
             <div className="flex items-center gap-1 rounded-lg border border-border/70 bg-muted/20 p-1">
               {[6, 24, 72].map((hours) => (
                 <Button
@@ -132,11 +124,6 @@ export default function QualityPage() {
                       </div>
                       <div className="mt-2 text-xs text-muted-foreground">
                         {finding.route} {finding.query ? `· ${finding.query}` : ""}
-                      </div>
-                      <div className="mt-3">
-                        <Button asChild variant="outline" size="sm">
-                          <Link href={`/runs`}>Open Runs</Link>
-                        </Button>
                       </div>
                     </div>
                   ))

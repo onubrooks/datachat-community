@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -217,21 +215,6 @@ export default function RunsPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button asChild variant="secondary">
-              <Link href="/">Chat</Link>
-            </Button>
-            <Button asChild variant="secondary">
-              <Link href="/databases">Databases</Link>
-            </Button>
-            <Button asChild variant="secondary">
-              <Link href="/settings">Settings</Link>
-            </Button>
-            <Button asChild variant="secondary">
-              <Link href="/monitoring">Monitoring</Link>
-            </Button>
-            <Button asChild variant="secondary">
-              <Link href="/quality">Quality</Link>
-            </Button>
             <Button variant="outline" onClick={() => void loadRuns(selectedRunId)} disabled={loading}>
               {loading ? "Refreshing..." : "Refresh"}
             </Button>

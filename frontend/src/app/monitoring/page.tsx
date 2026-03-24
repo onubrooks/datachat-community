@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -90,15 +88,6 @@ export default function MonitoringPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button asChild variant="secondary">
-              <Link href="/runs">Runs</Link>
-            </Button>
-            <Button asChild variant="secondary">
-              <Link href="/databases">Databases</Link>
-            </Button>
-            <Button asChild variant="secondary">
-              <Link href="/settings">Settings</Link>
-            </Button>
             <div className="flex items-center gap-1 rounded-lg border border-border/70 bg-muted/20 p-1">
               {[6, 24, 72].map((hours) => (
                 <Button

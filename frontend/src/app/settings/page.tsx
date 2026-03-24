@@ -7,7 +7,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -277,11 +276,6 @@ export default function SettingsPage() {
             <p className="text-sm text-muted-foreground">
               Configure UI behavior and runtime setup without editing .env.
             </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button asChild variant="secondary" size="sm">
-              <Link href="/">Back to Chat</Link>
-            </Button>
           </div>
         </div>
 
