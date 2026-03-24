@@ -278,9 +278,17 @@ export default function SettingsPage() {
               Configure UI behavior and runtime setup without editing .env.
             </p>
           </div>
-          <Button asChild variant="secondary" size="sm">
-            <Link href="/">Back to Chat</Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/">Back to Chat</Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/runs">Runs</Link>
+            </Button>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/monitoring">Monitoring</Link>
+            </Button>
+          </div>
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">

@@ -189,6 +189,7 @@ class WorkflowArtifacts(BaseModel):
 class ChatResponse(BaseModel):
     """Response model for chat endpoint."""
 
+    run_id: str | None = Field(default=None, description="Persisted run identifier")
     answer: str = Field(..., description="Natural language answer to the query")
     clarifying_questions: list[str] = Field(
         default_factory=list,

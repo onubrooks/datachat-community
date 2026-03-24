@@ -56,6 +56,7 @@ export interface ValidationWarning {
 }
 
 export interface ChatResponse {
+  run_id?: string | null;
   answer: string;
   clarifying_questions?: string[];
   sub_answers?: {
@@ -465,6 +466,80 @@ export interface SyncStatusResponse {
   error: string | null;
 }
 
+export interface RunStepResponse {
+  step_id: string;
+  step_order: number;
+  step_name: string;
+  status: string;
+  latency_ms?: number | null;
+  summary: Record<string, unknown>;
+  created_at?: string | null;
+}
+
+export interface RunSummaryResponse {
+  run_id: string;
+  run_type: string;
+  status: string;
+  route?: string | null;
+  connection_id?: string | null;
+  conversation_id?: string | null;
+  correlation_id?: string | null;
+  failure_class?: string | null;
+  confidence?: number | null;
+  warning_count: number;
+  error_count: number;
+  latency_ms?: number | null;
+  summary: Record<string, unknown>;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface RunDetailResponse extends RunSummaryResponse {
+  output: Record<string, unknown>;
+  steps: RunStepResponse[];
+}
+
+export interface RunListResponse {
+  runs: RunSummaryResponse[];
+}
+
+export interface MonitoringRouteBreakdown {
+  route: string;
+  count: number;
+  success_rate: number;
+  failed: number;
+}
+
+export interface MonitoringFailureBreakdown {
+  failure_class: string;
+  count: number;
+}
+
+export interface MonitoringRecentFailure {
+  run_id: string;
+  route: string;
+  failure_class?: string | null;
+  query: string;
+  created_at: string;
+}
+
+export interface MonitoringSummaryResponse {
+  window_hours: number;
+  total_runs: number;
+  completed_runs: number;
+  failed_runs: number;
+  success_rate: number;
+  p50_latency_ms?: number | null;
+  p95_latency_ms?: number | null;
+  clarification_rate: number;
+  retrieval_miss_rate: number;
+  route_breakdown: MonitoringRouteBreakdown[];
+  failure_breakdown: MonitoringFailureBreakdown[];
+  recent_failures: MonitoringRecentFailure[];
+}
+
 /**
  * API Client Configuration
  */
@@ -513,6 +588,38 @@ export class DataChatAPI {
 
     if (!response.ok) {
       throw new Error(`Health check failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async listRuns(limit: number = 50): Promise<RunListResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/runs?limit=${limit}`);
+
+    if (!response.ok) {
+      throw new Error(`Run list failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getRun(runId: string): Promise<RunDetailResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/runs/${runId}`);
+
+    if (!response.ok) {
+      throw new Error(`Run detail failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getMonitoringSummary(windowHours: number = 24): Promise<MonitoringSummaryResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/monitoring/summary?window_hours=${windowHours}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Monitoring summary failed: ${response.statusText}`);
     }
 
     return response.json();

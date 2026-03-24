@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -18,6 +20,7 @@ from backend.profiling.profiler import SchemaProfiler
 from backend.profiling.store import ProfilingStore
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class ProfilingRequest(BaseModel):
@@ -177,6 +180,12 @@ def _get_knowledge_graph():
     return graph
 
 
+def _get_run_store():
+    from backend.api.main import app_state
+
+    return app_state.get("run_store")
+
+
 def _to_pending_response(pending: PendingDataPoint) -> PendingDataPointResponse:
     return PendingDataPointResponse(
         pending_id=pending.pending_id,
@@ -232,6 +241,49 @@ def _select_generation_tables(
     return [table.name for table in selection]
 
 
+async def _persist_background_run(
+    *,
+    run_type: str,
+    status: str,
+    route: str,
+    connection_id: UUID | None,
+    correlation_id: str,
+    failure_class: str | None,
+    warning_count: int,
+    error_count: int,
+    latency_ms: float,
+    summary: dict,
+    output: dict,
+    steps: list[dict],
+    started_at: datetime,
+) -> None:
+    run_store = _get_run_store()
+    if run_store is None:
+        return
+    try:
+        await run_store.save_run(
+            run_id=UUID(correlation_id),
+            run_type=run_type,
+            status=status,
+            route=route,
+            connection_id=str(connection_id) if connection_id else None,
+            conversation_id=None,
+            correlation_id=correlation_id,
+            failure_class=failure_class,
+            confidence=None,
+            warning_count=warning_count,
+            error_count=error_count,
+            latency_ms=latency_ms,
+            summary=summary,
+            output=output,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+            steps=steps,
+        )
+    except Exception as exc:
+        logger.warning("Failed to persist %s run %s: %s", run_type, correlation_id, exc)
+
+
 @router.post(
     "/databases/{connection_id}/profile",
     response_model=ProfilingJobResponse,
@@ -247,6 +299,7 @@ async def start_profiling_job(
 
     async def run_job() -> None:
         profiler = SchemaProfiler(manager)
+        started_at = datetime.now(UTC)
 
         async def progress_callback(
             total: int,
@@ -290,8 +343,91 @@ async def start_profiling_job(
                     tables_skipped=profile.tables_skipped,
                 ),
             )
+            total_tables = profile.total_tables_discovered
+            tables_completed = profile.tables_profiled
+            tables_failed = profile.tables_failed
+            tables_skipped = profile.tables_skipped
+            await _persist_background_run(
+                run_type="profile",
+                status="completed",
+                route="profile_database",
+                connection_id=connection_id,
+                correlation_id=str(job.job_id),
+                failure_class=None,
+                warning_count=tables_failed + tables_skipped,
+                error_count=0,
+                latency_ms=(datetime.now(UTC) - started_at).total_seconds() * 1000,
+                summary={
+                    "connection_id": str(connection_id),
+                    "profile_id": str(profile.profile_id),
+                    "total_tables": total_tables,
+                    "tables_completed": tables_completed,
+                    "tables_failed": tables_failed,
+                    "tables_skipped": tables_skipped,
+                },
+                output={
+                    "job_id": str(job.job_id),
+                    "profile_id": str(profile.profile_id),
+                    "status": "completed",
+                    "progress": {
+                        "total_tables": total_tables,
+                        "tables_completed": tables_completed,
+                        "tables_failed": tables_failed,
+                        "tables_skipped": tables_skipped,
+                    },
+                },
+                steps=[
+                    {
+                        "step_id": job.job_id,
+                        "step_order": 1,
+                        "step_name": "profile_database",
+                        "status": "completed",
+                        "latency_ms": (datetime.now(UTC) - started_at).total_seconds() * 1000,
+                        "summary": {
+                            "sample_size": payload.sample_size,
+                            "max_tables": payload.max_tables,
+                            "total_tables": total_tables,
+                        },
+                        "created_at": started_at,
+                    }
+                ],
+                started_at=started_at,
+            )
         except Exception as exc:
             await store.update_job(job.job_id, status="failed", error=str(exc))
+            await _persist_background_run(
+                run_type="profile",
+                status="failed",
+                route="profile_database",
+                connection_id=connection_id,
+                correlation_id=str(job.job_id),
+                failure_class="profiling_failed",
+                warning_count=0,
+                error_count=1,
+                latency_ms=(datetime.now(UTC) - started_at).total_seconds() * 1000,
+                summary={
+                    "connection_id": str(connection_id),
+                    "job_id": str(job.job_id),
+                    "error": str(exc),
+                },
+                output={
+                    "job_id": str(job.job_id),
+                    "status": "failed",
+                    "error": str(exc),
+                },
+                steps=[
+                    {
+                        "step_id": job.job_id,
+                        "step_order": 1,
+                        "step_name": "profile_database",
+                        "status": "failed",
+                        "latency_ms": (datetime.now(UTC) - started_at).total_seconds() * 1000,
+                        "summary": {"error": str(exc)},
+                        "created_at": started_at,
+                    }
+                ],
+                started_at=started_at,
+            )
 
     asyncio.create_task(run_job())
 
@@ -351,6 +487,7 @@ async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJ
 
     async def run_generation() -> None:
         generator = DataPointGenerator()
+        started_at = datetime.now(UTC)
         try:
             selected_tables = _select_generation_tables(
                 profile.tables, payload.tables, payload.max_tables
@@ -420,9 +557,91 @@ async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJ
                     batch_size=payload.batch_size,
                 ),
             )
+            generated_count = len(pending_items)
+            await _persist_background_run(
+                run_type="generate",
+                status="completed",
+                route="generate_datapoints",
+                connection_id=profile.connection_id,
+                correlation_id=str(job.job_id),
+                failure_class=None,
+                warning_count=0,
+                error_count=0,
+                latency_ms=(datetime.now(UTC) - started_at).total_seconds() * 1000,
+                summary={
+                    "profile_id": str(profile.profile_id),
+                    "connection_id": str(profile.connection_id),
+                    "depth": payload.depth,
+                    "selected_tables": selected_tables,
+                    "generated_count": generated_count,
+                },
+                output={
+                    "job_id": str(job.job_id),
+                    "profile_id": str(profile.profile_id),
+                    "status": "completed",
+                    "generated_count": generated_count,
+                    "progress": {
+                        "total_tables": total_tables,
+                        "tables_completed": total_tables,
+                        "batch_size": payload.batch_size,
+                    },
+                },
+                steps=[
+                    {
+                        "step_id": job.job_id,
+                        "step_order": 1,
+                        "step_name": "generate_datapoints",
+                        "status": "completed",
+                        "latency_ms": (datetime.now(UTC) - started_at).total_seconds() * 1000,
+                        "summary": {
+                            "depth": payload.depth,
+                            "selected_tables": selected_tables,
+                            "generated_count": generated_count,
+                        },
+                        "created_at": started_at,
+                    }
+                ],
+                started_at=started_at,
+            )
         except Exception as exc:
             await store.update_generation_job(
                 job.job_id, status="failed", error=str(exc)
+            )
+            await _persist_background_run(
+                run_type="generate",
+                status="failed",
+                route="generate_datapoints",
+                connection_id=profile.connection_id,
+                correlation_id=str(job.job_id),
+                failure_class="generation_failed",
+                warning_count=0,
+                error_count=1,
+                latency_ms=(datetime.now(UTC) - started_at).total_seconds() * 1000,
+                summary={
+                    "profile_id": str(profile.profile_id),
+                    "connection_id": str(profile.connection_id),
+                    "depth": payload.depth,
+                    "selected_tables": selected_tables if 'selected_tables' in locals() else [],
+                    "error": str(exc),
+                },
+                output={
+                    "job_id": str(job.job_id),
+                    "profile_id": str(profile.profile_id),
+                    "status": "failed",
+                    "error": str(exc),
+                },
+                steps=[
+                    {
+                        "step_id": job.job_id,
+                        "step_order": 1,
+                        "step_name": "generate_datapoints",
+                        "status": "failed",
+                        "latency_ms": (datetime.now(UTC) - started_at).total_seconds() * 1000,
+                        "summary": {"error": str(exc)},
+                        "created_at": started_at,
+                    }
+                ],
+                started_at=started_at,
             )
 
     asyncio.create_task(run_generation())

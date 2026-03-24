@@ -30,7 +30,9 @@ from backend.api.routes import (
     datapoints,
     feedback,
     health,
+    monitoring,
     profiling,
+    runs,
     system,
     tools,
 )
@@ -57,6 +59,7 @@ app_state = {
     "profiling_store": None,
     "feedback_store": None,
     "conversation_store": None,
+    "run_store": None,
     "sync_orchestrator": None,
     "datapoint_watcher": None,
 }
@@ -188,12 +191,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.warning(f"Conversation store unavailable: {e}")
             app_state["conversation_store"] = None
 
+        # Initialize run store
+        logger.info("Initializing run store...")
+        try:
+            from backend.runs.store import RunStore
+
+            if config.system_database.url:
+                run_store = RunStore()
+                await run_store.initialize()
+                app_state["run_store"] = run_store
+            else:
+                logger.warning("SYSTEM_DATABASE_URL not set; run store disabled.")
+                app_state["run_store"] = None
+        except Exception as e:
+            logger.warning(f"Run store unavailable: {e}")
+            app_state["run_store"] = None
+
         # Initialize pipeline
         logger.info("Initializing pipeline orchestrator...")
         if app_state["connector"] is not None:
             pipeline = DataChatPipeline(
                 retriever=retriever,
                 connector=app_state["connector"],
+                run_store=app_state["run_store"],
                 max_retries=3,
             )
             app_state["pipeline"] = pipeline
@@ -273,6 +293,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.info("Conversation store closed")
             except Exception as e:
                 logger.error(f"Error closing conversation store: {e}")
+
+        if app_state["run_store"]:
+            try:
+                await app_state["run_store"].close()
+                logger.info("Run store closed")
+            except Exception as e:
+                logger.error(f"Error closing run store: {e}")
 
         if app_state["datapoint_watcher"]:
             try:
@@ -366,6 +393,8 @@ app.include_router(profiling.router, prefix="/api/v1", tags=["profiling"])
 app.include_router(datapoints.router, prefix="/api/v1", tags=["datapoints"])
 app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
 app.include_router(conversations.router, prefix="/api/v1", tags=["conversations"])
+app.include_router(runs.router, prefix="/api/v1", tags=["runs"])
+app.include_router(monitoring.router, prefix="/api/v1", tags=["monitoring"])
 app.include_router(tools.router, prefix="/api/v1", tags=["tools"])
 app.include_router(websocket.router, tags=["websocket"])
 

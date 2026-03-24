@@ -141,7 +141,7 @@ class ContextAgent(BaseAgent):
 
             return ContextAgentOutput(
                 success=True,
-                data={},
+                data={"retrieval_trace": result.trace},
                 metadata=metadata,
                 next_agent="SQLAgent",
                 investigation_memory=investigation_memory,

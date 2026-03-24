@@ -16,10 +16,11 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
 from urllib.parse import urlparse
+from uuid import UUID, uuid4
 
 from langgraph.graph import END, StateGraph
 
@@ -101,6 +102,8 @@ class PipelineState(TypedDict, total=False):
     target_connection_id: str | None
     user_id: str | None
     correlation_id: str | None
+    run_id: str | None
+    run_started_at: datetime | None
     tool_approved: bool
     intent_gate: str | None
     route: (
@@ -126,6 +129,7 @@ class PipelineState(TypedDict, total=False):
     investigation_memory: dict[str, Any] | None
     retrieved_datapoints: list[dict[str, Any]]
     context_confidence: float | None
+    retrieval_trace: dict[str, Any] | None
     context_needs_sql: bool | None
     context_preface: str | None
     context_evidence: list[dict[str, Any]]
@@ -232,6 +236,7 @@ class DataChatPipeline:
         self,
         retriever: Retriever,
         connector: BaseConnector,
+        run_store: Any | None = None,
         max_retries: int = 3,
     ):
         """
@@ -244,6 +249,7 @@ class DataChatPipeline:
         """
         self.retriever = retriever
         self.connector = connector
+        self.run_store = run_store
         self.max_retries = max_retries
         self.max_clarifications = 3
         self.config = get_settings()
@@ -862,27 +868,45 @@ class DataChatPipeline:
                 target_connection_id=state.get("target_connection_id"),
                 database_url=state.get("database_url"),
             )
-            connection_scoped_datapoints = self._filter_datapoints_by_target_connection(
-                [
-                    {
-                        "datapoint_id": dp.datapoint_id,
-                        "datapoint_type": dp.datapoint_type,
-                        "name": dp.name,
-                        "score": dp.score,
-                        "source": dp.source,
-                        "metadata": dp.metadata,
-                        "content": dp.content,
-                    }
-                    for dp in output.investigation_memory.datapoints
-                ],
-                target_connection_id=state.get("target_connection_id"),
-                target_connection_ids=allowed_connection_ids,
+            raw_datapoints = [
+                {
+                    "datapoint_id": dp.datapoint_id,
+                    "datapoint_type": dp.datapoint_type,
+                    "name": dp.name,
+                    "score": dp.score,
+                    "source": dp.source,
+                    "metadata": dp.metadata,
+                    "content": dp.content,
+                }
+                for dp in output.investigation_memory.datapoints
+            ]
+            connection_scoped_datapoints, connection_scope_trace = (
+                self._filter_datapoints_by_target_connection(
+                    raw_datapoints,
+                    target_connection_id=state.get("target_connection_id"),
+                    target_connection_ids=allowed_connection_ids,
+                )
             )
-            filtered_datapoints = await self._filter_datapoints_by_live_schema(
+            filtered_datapoints, live_schema_trace = await self._filter_datapoints_by_live_schema(
                 connection_scoped_datapoints,
                 database_type=state.get("database_type"),
                 database_url=state.get("database_url"),
             )
+            state["retrieval_trace"] = {
+                **(output.data.get("retrieval_trace", {}) if isinstance(output.data, dict) else {}),
+                "connection_scope": connection_scope_trace,
+                "live_schema_filter": live_schema_trace,
+                "selected_datapoints": [
+                    {
+                        "datapoint_id": dp["datapoint_id"],
+                        "name": dp.get("name"),
+                        "score": dp.get("score"),
+                        "source": dp.get("source"),
+                        "source_tier": (dp.get("metadata") or {}).get("source_tier"),
+                    }
+                    for dp in filtered_datapoints
+                ],
+            }
             sources_used = list({dp["datapoint_id"] for dp in filtered_datapoints})
             state["investigation_memory"] = {
                 "query": output.investigation_memory.query,
@@ -930,7 +954,7 @@ class DataChatPipeline:
         datapoints: list[dict[str, Any]],
         target_connection_id: str | None,
         target_connection_ids: set[str] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """
         Scope retrieved DataPoints to the selected connection.
 
@@ -942,7 +966,12 @@ class DataChatPipeline:
           legacy unscoped datapoints for backwards compatibility.
         """
         if not target_connection_id:
-            return datapoints
+            return datapoints, {
+                "applied": False,
+                "allowed_connection_ids": [],
+                "filtered_out": [],
+                "kept_count": len(datapoints),
+            }
 
         allowed_connection_ids = {str(target_connection_id)}
         if target_connection_ids:
@@ -954,6 +983,7 @@ class DataChatPipeline:
         global_items: list[dict[str, Any]] = []
         unscoped: list[dict[str, Any]] = []
         removed_foreign = 0
+        filtered_out: list[dict[str, Any]] = []
         for dp in datapoints:
             metadata = dp.get("metadata") or {}
             scope = str(metadata.get("scope", "")).strip().lower()
@@ -975,6 +1005,13 @@ class DataChatPipeline:
 
             if str(connection_id) not in allowed_connection_ids:
                 removed_foreign += 1
+                filtered_out.append(
+                    {
+                        "datapoint_id": dp.get("datapoint_id"),
+                        "reason": "different_connection_scope",
+                        "connection_id": str(connection_id),
+                    }
+                )
                 continue
             scoped.append(dp)
 
@@ -986,7 +1023,13 @@ class DataChatPipeline:
 
         # Preferred mode: only scoped + global datapoints.
         if scoped or global_items:
-            return [*scoped, *global_items]
+            kept = [*scoped, *global_items]
+            return kept, {
+                "applied": True,
+                "allowed_connection_ids": sorted(allowed_connection_ids),
+                "filtered_out": filtered_out,
+                "kept_count": len(kept),
+            }
 
         # Backwards compatibility: old datasets may be unscoped.
         if unscoped:
@@ -994,9 +1037,20 @@ class DataChatPipeline:
                 "No scoped datapoints matched target connection; using %s unscoped datapoints",
                 len(unscoped),
             )
-            return unscoped
+            return unscoped, {
+                "applied": True,
+                "allowed_connection_ids": sorted(allowed_connection_ids),
+                "filtered_out": filtered_out,
+                "kept_count": len(unscoped),
+                "fallback": "unscoped_legacy_datapoints",
+            }
 
-        return []
+        return [], {
+            "applied": True,
+            "allowed_connection_ids": sorted(allowed_connection_ids),
+            "filtered_out": filtered_out,
+            "kept_count": 0,
+        }
 
     async def _resolve_equivalent_connection_ids(
         self,
@@ -1227,18 +1281,31 @@ class DataChatPipeline:
         datapoints: list[dict[str, Any]],
         database_type: str | None = None,
         database_url: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         live_tables = await self._get_live_table_catalog(
             database_type=database_type,
             database_url=database_url,
         )
         if not live_tables:
-            return datapoints
+            return datapoints, {
+                "applied": False,
+                "live_table_count": 0,
+                "filtered_out": [],
+                "kept_count": len(datapoints),
+            }
 
         filtered: list[dict[str, Any]] = []
+        filtered_out: list[dict[str, Any]] = []
         for dp in datapoints:
             table_keys = self._extract_datapoint_table_keys(dp)
             if table_keys and table_keys.isdisjoint(live_tables):
+                filtered_out.append(
+                    {
+                        "datapoint_id": dp.get("datapoint_id"),
+                        "reason": "missing_live_schema",
+                        "table_keys": sorted(table_keys),
+                    }
+                )
                 continue
             filtered.append(dp)
 
@@ -1248,7 +1315,12 @@ class DataChatPipeline:
                 len(datapoints) - len(filtered),
             )
 
-        return filtered
+        return filtered, {
+            "applied": True,
+            "live_table_count": len(live_tables),
+            "filtered_out": filtered_out,
+            "kept_count": len(filtered),
+        }
 
     async def _get_live_table_catalog(
         self,
@@ -1602,7 +1674,11 @@ class DataChatPipeline:
                         state,
                         stage="sql",
                         selected_action="use_preplanned_sql",
-                        outputs={"generated_sql": True, "preplanned_sql": True},
+                        outputs={
+                            "generated_sql": planned_sql.sql,
+                            "preplanned_sql": True,
+                            "sql_confidence": planned_sql.confidence,
+                        },
                     )
                     logger.info(
                         "SQLAgent complete from multi planner: "
@@ -1649,7 +1725,11 @@ class DataChatPipeline:
                         state,
                         stage="sql",
                         selected_action="request_clarification",
-                        outputs={"clarification_needed": True},
+                        outputs={
+                            "clarification_needed": True,
+                            "generated_sql": output.generated_sql.sql,
+                            "clarifying_questions": questions,
+                        },
                         verification_status="needs_user_input",
                         verification_reason="sql_agent_requested_clarification",
                     )
@@ -1668,7 +1748,11 @@ class DataChatPipeline:
                         state,
                         stage="sql",
                         selected_action="request_clarification",
-                        outputs={"clarification_needed": True},
+                        outputs={
+                            "clarification_needed": True,
+                            "generated_sql": output.generated_sql.sql,
+                            "clarifying_questions": questions,
+                        },
                         verification_status="needs_user_input",
                         verification_reason="placeholder_sql_blocked",
                     )
@@ -1696,7 +1780,11 @@ class DataChatPipeline:
                         state,
                         stage="sql",
                         selected_action="request_clarification",
-                        outputs={"clarification_needed": True},
+                        outputs={
+                            "clarification_needed": True,
+                            "generated_sql": output.generated_sql.sql,
+                            "clarifying_questions": fallback["questions"] if fallback else [],
+                        },
                         verification_status="needs_user_input",
                         verification_reason="low_confidence_sql_guard",
                     )
@@ -1762,9 +1850,10 @@ class DataChatPipeline:
             stage="sql",
             selected_action="generate_sql",
             outputs={
-                "generated_sql": bool(state.get("generated_sql")),
+                "generated_sql": state.get("generated_sql"),
                 "clarification_needed": bool(state.get("clarification_needed")),
                 "sql_confidence": state.get("sql_confidence"),
+                "sql_explanation": state.get("sql_explanation"),
             },
             verification_status="ok" if not state.get("error") else "failed",
             verification_reason=None if not state.get("error") else "sql_generation_error",
@@ -2263,6 +2352,152 @@ class DataChatPipeline:
                 "reason": reason,
             }
         )
+
+    def _build_run_status(self, state: PipelineState) -> str:
+        if state.get("error"):
+            return "failed"
+        terminal_state = str(state.get("loop_terminal_state") or "").strip().lower()
+        if terminal_state == "needs_user_input":
+            return "needs_input"
+        if terminal_state == "blocked":
+            return "failed"
+        return "completed"
+
+    @staticmethod
+    def _build_run_summary(state: PipelineState) -> dict[str, Any]:
+        query_result = state.get("query_result") if isinstance(state.get("query_result"), dict) else {}
+        return {
+            "query": state.get("query"),
+            "route": state.get("route"),
+            "answer_source": state.get("answer_source"),
+            "answer_confidence": state.get("answer_confidence"),
+            "clarification_needed": bool(state.get("clarification_needed")),
+            "clarifying_questions": state.get("clarifying_questions", []),
+            "validation_error_count": len(state.get("validation_errors", [])),
+            "validation_warning_count": len(state.get("validation_warnings", [])),
+            "retrieved_datapoint_count": len(state.get("retrieved_datapoints", [])),
+            "used_datapoint_count": len(state.get("used_datapoints", [])),
+            "retrieval_mode": (state.get("investigation_memory") or {}).get("retrieval_mode"),
+            "row_count": query_result.get("row_count") if query_result else None,
+            "workflow_mode": state.get("workflow_mode"),
+        }
+
+    def _build_run_output(self, state: PipelineState) -> dict[str, Any]:
+        query_result = state.get("query_result") if isinstance(state.get("query_result"), dict) else None
+        return {
+            "query": state.get("query"),
+            "natural_language_answer": state.get("natural_language_answer"),
+            "generated_sql": state.get("generated_sql"),
+            "validated_sql": state.get("validated_sql"),
+            "route": state.get("route"),
+            "answer_source": state.get("answer_source"),
+            "answer_confidence": state.get("answer_confidence"),
+            "error": state.get("error"),
+            "failure_class": state.get("last_error_class"),
+            "metrics": {
+                "total_latency_ms": state.get("total_latency_ms"),
+                "agent_timings": state.get("agent_timings", {}),
+                "llm_calls": state.get("llm_calls", 0),
+                "total_tokens_used": state.get("total_tokens_used", 0),
+            },
+            "retrieval_trace": state.get("retrieval_trace", {}),
+            "query_result": {
+                "row_count": query_result.get("row_count"),
+                "columns": query_result.get("columns"),
+                "execution_time_ms": query_result.get("execution_time_ms"),
+                "was_truncated": query_result.get("was_truncated"),
+            }
+            if query_result
+            else None,
+            "decision_trace": state.get("decision_trace", []),
+            "action_trace": state.get("action_trace", []),
+            "loop_terminal_state": state.get("loop_terminal_state"),
+            "loop_stop_reason": state.get("loop_stop_reason"),
+        }
+
+    def _build_run_steps(self, state: PipelineState) -> list[dict[str, Any]]:
+        trace = state.get("action_trace") or []
+        if isinstance(trace, list) and trace:
+            agent_timings = state.get("agent_timings") or {}
+            stage_timings = {
+                "query_analyzer": agent_timings.get("query_analyzer"),
+                "context": agent_timings.get("context"),
+                "context_answer": agent_timings.get("context_answer"),
+                "sql": agent_timings.get("sql"),
+                "validator": agent_timings.get("validator"),
+                "executor": agent_timings.get("executor"),
+                "tool_planner": agent_timings.get("tool_planner"),
+                "tool_executor": agent_timings.get("tool_executor"),
+                "response_synthesis": agent_timings.get("response_synthesis"),
+            }
+            steps: list[dict[str, Any]] = []
+            for entry in trace:
+                if not isinstance(entry, dict):
+                    continue
+                step_order = int(entry.get("step", len(steps) + 1))
+                stage = str(entry.get("stage") or f"step_{step_order}")
+                verification = entry.get("verification") or {}
+                steps.append(
+                    {
+                        "step_id": uuid4(),
+                        "step_order": step_order,
+                        "step_name": stage,
+                        "status": str(verification.get("status") or "ok"),
+                        "latency_ms": stage_timings.get(stage),
+                        "summary": entry,
+                        "created_at": datetime.now(UTC),
+                    }
+                )
+            if steps:
+                return steps
+
+        steps = []
+        for idx, (stage, latency_ms) in enumerate((state.get("agent_timings") or {}).items(), start=1):
+            steps.append(
+                {
+                    "step_id": uuid4(),
+                    "step_order": idx,
+                    "step_name": stage,
+                    "status": "ok",
+                    "latency_ms": latency_ms,
+                    "summary": {"stage": stage, "latency_ms": latency_ms},
+                    "created_at": datetime.now(UTC),
+                }
+            )
+        return steps
+
+    async def _persist_completed_run(self, state: PipelineState) -> None:
+        if self.run_store is None:
+            return
+        run_id = state.get("run_id")
+        if not run_id:
+            return
+        try:
+            await self.run_store.save_run(
+                run_id=UUID(str(run_id)),
+                run_type="chat",
+                status=self._build_run_status(state),
+                route=str(state.get("route") or state.get("answer_source") or "unknown"),
+                connection_id=(
+                    str(state.get("target_connection_id"))
+                    if state.get("target_connection_id")
+                    else None
+                ),
+                conversation_id=None,
+                correlation_id=str(state.get("correlation_id") or ""),
+                failure_class=state.get("last_error_class"),
+                confidence=state.get("answer_confidence") or state.get("sql_confidence"),
+                warning_count=len(state.get("validation_warnings", [])),
+                error_count=len(state.get("validation_errors", [])) + (1 if state.get("error") else 0),
+                latency_ms=state.get("total_latency_ms"),
+                summary=self._build_run_summary(state),
+                output=self._build_run_output(state),
+                started_at=state.get("run_started_at") or datetime.now(UTC),
+                completed_at=datetime.now(UTC),
+                steps=self._build_run_steps(state),
+            )
+        except Exception as exc:
+            logger.warning("Failed to persist pipeline run: %s", exc)
 
     def _track_tokens(
         self,
@@ -3919,6 +4154,8 @@ class DataChatPipeline:
             "target_connection_id": target_connection_id,
             "user_id": "anonymous",
             "correlation_id": f"{correlation_prefix}-{int(time.time() * 1000)}",
+            "run_id": str(uuid4()),
+            "run_started_at": datetime.now(UTC),
             "tool_approved": tool_approved,
             "intent_gate": None,
             "intent_summary": None,
@@ -3967,6 +4204,7 @@ class DataChatPipeline:
             "investigation_memory": None,
             "retrieved_datapoints": [],
             "context_confidence": None,
+            "retrieval_trace": None,
             "context_needs_sql": None,
             "context_preface": None,
             "context_evidence": [],
@@ -4571,7 +4809,7 @@ class DataChatPipeline:
         """
         parts = self._split_multi_query(query)
         if len(parts) <= 1:
-            return await self._run_single_query(
+            result = await self._run_single_query(
                 query=query,
                 conversation_history=conversation_history,
                 session_summary=session_summary,
@@ -4583,6 +4821,8 @@ class DataChatPipeline:
                 workflow_mode=workflow_mode,
                 tool_approved=tool_approved,
             )
+            await self._persist_completed_run(result)
+            return result
 
         (
             planned_sql_map,
@@ -4613,7 +4853,7 @@ class DataChatPipeline:
             sub_results.append(result)
             sub_answers.append(self._build_sub_answer(index, part, result))
 
-        return self._aggregate_multi_results(
+        result = self._aggregate_multi_results(
             original_query=query,
             sub_results=sub_results,
             sub_answers=sub_answers,
@@ -4629,6 +4869,8 @@ class DataChatPipeline:
             extra_llm_calls=planner_llm_calls,
             extra_agent_timings={"multi_sql_planner": planner_duration_ms},
         )
+        await self._persist_completed_run(result)
+        return result
 
     async def stream(
         self,
@@ -4942,7 +5184,7 @@ class DataChatPipeline:
                 sub_results.append(result)
                 sub_answers.append(self._build_sub_answer(index, part, result))
 
-            return self._aggregate_multi_results(
+            result = self._aggregate_multi_results(
                 original_query=query,
                 sub_results=sub_results,
                 sub_answers=sub_answers,
@@ -4958,8 +5200,10 @@ class DataChatPipeline:
                 extra_llm_calls=planner_llm_calls,
                 extra_agent_timings={"multi_sql_planner": planner_duration_ms},
             )
+            await self._persist_completed_run(result)
+            return result
 
-        return await self._run_single_query_with_streaming_callback(
+        result = await self._run_single_query_with_streaming_callback(
             query=query,
             conversation_history=conversation_history,
             session_summary=session_summary,
@@ -4973,6 +5217,8 @@ class DataChatPipeline:
             event_callback=event_callback,
             correlation_prefix="stream",
         )
+        await self._persist_completed_run(result)
+        return result
 
     def _finalize_session_memory(self, state: PipelineState) -> None:
         """Persist compact memory fields for the next turn."""

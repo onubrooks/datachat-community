@@ -26,6 +26,7 @@ class TestChatEndpoint:
     def mock_pipeline_result(self):
         """Mock successful pipeline result."""
         return {
+            "run_id": "3f0bcf52-1ec7-48ba-b33a-1c90824cab6f",
             "query": "What's the total revenue?",
             "natural_language_answer": "The total revenue is $1,234,567.89",
             "validated_sql": "SELECT SUM(amount) as total_revenue FROM analytics.fact_sales WHERE status = 'completed'",
@@ -160,6 +161,7 @@ class TestChatEndpoint:
                 # Assert response structure
                 data = response.json()
                 assert "answer" in data
+                assert "run_id" in data
                 assert "sql" in data
                 assert "data" in data
                 assert "visualization_hint" in data
@@ -175,6 +177,7 @@ class TestChatEndpoint:
 
                 # Assert content
                 assert data["answer"] == "The total revenue is $1,234,567.89"
+                assert data["run_id"] == "3f0bcf52-1ec7-48ba-b33a-1c90824cab6f"
                 assert "SELECT SUM(amount)" in data["sql"]
                 assert data["data"]["total_revenue"] == [1234567.89]
                 assert len(data["sources"]) == 1
