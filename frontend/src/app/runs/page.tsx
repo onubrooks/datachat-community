@@ -229,6 +229,9 @@ export default function RunsPage() {
             <Button asChild variant="secondary">
               <Link href="/monitoring">Monitoring</Link>
             </Button>
+            <Button asChild variant="secondary">
+              <Link href="/quality">Quality</Link>
+            </Button>
             <Button variant="outline" onClick={() => void loadRuns(selectedRunId)} disabled={loading}>
               {loading ? "Refreshing..." : "Refresh"}
             </Button>
@@ -384,6 +387,29 @@ export default function RunsPage() {
                     <pre className="mt-3 overflow-x-auto rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
                       {compactJson(selectedRun.summary)}
                     </pre>
+                  </Card>
+
+                  <Card className="p-4">
+                    <SectionTitle title="Quality Findings" subtitle="Advisories captured for this run." />
+                    <div className="mt-3 space-y-3">
+                      {(selectedRun.quality_findings || []).length === 0 ? (
+                        <div className="text-sm text-muted-foreground">No persisted quality findings for this run.</div>
+                      ) : (
+                        selectedRun.quality_findings.map((finding) => (
+                          <div key={finding.finding_id} className="rounded-md border border-border/70 p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-medium text-foreground">{finding.message}</div>
+                                <div className="mt-1 text-[11px] text-muted-foreground">
+                                  {finding.severity} · {finding.category} · {finding.code}
+                                </div>
+                              </div>
+                              <div className="text-[11px] text-muted-foreground">{formatTimestamp(finding.created_at)}</div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </Card>
                 </div>
               ) : activeTab === "steps" ? (

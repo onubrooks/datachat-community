@@ -41,9 +41,24 @@ class RunSummaryResponse(BaseModel):
     updated_at: datetime | None = None
 
 
+class QualityFindingResponse(BaseModel):
+    finding_id: str
+    run_id: str
+    finding_type: str
+    severity: str
+    category: str
+    code: str
+    message: str
+    entity_type: str | None = None
+    entity_id: str | None = None
+    details: dict = Field(default_factory=dict)
+    created_at: datetime | None = None
+
+
 class RunDetailResponse(RunSummaryResponse):
     output: dict = Field(default_factory=dict)
     steps: list[RunStepResponse] = Field(default_factory=list)
+    quality_findings: list[QualityFindingResponse] = Field(default_factory=list)
 
 
 class RunListResponse(BaseModel):

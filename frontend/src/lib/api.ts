@@ -476,6 +476,20 @@ export interface RunStepResponse {
   created_at?: string | null;
 }
 
+export interface QualityFindingResponse {
+  finding_id: string;
+  run_id: string;
+  finding_type: string;
+  severity: string;
+  category: string;
+  code: string;
+  message: string;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  details: Record<string, unknown>;
+  created_at?: string | null;
+}
+
 export interface RunSummaryResponse {
   run_id: string;
   run_type: string;
@@ -499,6 +513,7 @@ export interface RunSummaryResponse {
 export interface RunDetailResponse extends RunSummaryResponse {
   output: Record<string, unknown>;
   steps: RunStepResponse[];
+  quality_findings: QualityFindingResponse[];
 }
 
 export interface RunListResponse {
@@ -514,6 +529,13 @@ export interface MonitoringRouteBreakdown {
 
 export interface MonitoringFailureBreakdown {
   failure_class: string;
+  count: number;
+}
+
+export interface MonitoringQualityBreakdown {
+  severity: string;
+  category: string;
+  code: string;
   count: number;
 }
 
@@ -537,7 +559,56 @@ export interface MonitoringSummaryResponse {
   retrieval_miss_rate: number;
   route_breakdown: MonitoringRouteBreakdown[];
   failure_breakdown: MonitoringFailureBreakdown[];
+  quality_breakdown: MonitoringQualityBreakdown[];
   recent_failures: MonitoringRecentFailure[];
+}
+
+export interface MonitoringTrendBucket {
+  bucket_start: string;
+  total_runs: number;
+  failed_runs: number;
+  success_rate: number;
+  p50_latency_ms?: number | null;
+  clarification_rate: number;
+  retrieval_miss_rate: number;
+}
+
+export interface MonitoringTrendResponse {
+  window_hours: number;
+  bucket_hours: number;
+  trend: MonitoringTrendBucket[];
+}
+
+export interface QualitySeverityBreakdown {
+  severity: string;
+  count: number;
+}
+
+export interface QualityCategoryBreakdown {
+  category: string;
+  count: number;
+}
+
+export interface QualityCodeBreakdown {
+  code: string;
+  severity: string;
+  category: string;
+  count: number;
+}
+
+export interface QualityRecentFinding extends QualityFindingResponse {
+  route: string;
+  query?: string | null;
+}
+
+export interface QualitySummaryResponse {
+  window_hours: number;
+  total_findings: number;
+  runs_with_findings: number;
+  severity_breakdown: QualitySeverityBreakdown[];
+  category_breakdown: QualityCategoryBreakdown[];
+  code_breakdown: QualityCodeBreakdown[];
+  recent_findings: QualityRecentFinding[];
 }
 
 /**
@@ -620,6 +691,33 @@ export class DataChatAPI {
 
     if (!response.ok) {
       throw new Error(`Monitoring summary failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getMonitoringTrends(
+    windowHours: number = 24,
+    bucketHours: number = 1
+  ): Promise<MonitoringTrendResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/monitoring/trends?window_hours=${windowHours}&bucket_hours=${bucketHours}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Monitoring trends failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getQualitySummary(windowHours: number = 24): Promise<QualitySummaryResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/quality/summary?window_hours=${windowHours}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Quality summary failed: ${response.statusText}`);
     }
 
     return response.json();

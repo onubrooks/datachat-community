@@ -408,7 +408,7 @@ async def system_reset(request: Request) -> SystemResetResponse:
             await connector.execute(
                 "TRUNCATE database_connections, profiling_jobs, profiling_profiles, "
                 "pending_datapoints, datapoint_generation_jobs, ui_feedback, ui_conversations, "
-                "ai_run_steps, ai_runs"
+                "ai_quality_findings, ai_run_steps, ai_runs"
             )
         finally:
             await connector.close()

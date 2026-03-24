@@ -1609,12 +1609,6 @@ export function DatabaseManager() {
           <Button asChild variant="secondary">
             <Link href="/">Back to Chat</Link>
           </Button>
-          <Button asChild variant="secondary">
-            <Link href="/runs">Runs</Link>
-          </Button>
-          <Button asChild variant="secondary">
-            <Link href="/monitoring">Monitoring</Link>
-          </Button>
           <Button variant="outline" onClick={handleSystemReset} disabled={jobs.resetting}>
             {jobs.resetting ? "Resetting..." : "Reset System"}
           </Button>

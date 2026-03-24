@@ -2382,6 +2382,120 @@ class DataChatPipeline:
             "workflow_mode": state.get("workflow_mode"),
         }
 
+    @staticmethod
+    def _build_quality_findings(state: PipelineState) -> list[dict[str, Any]]:
+        findings: list[dict[str, Any]] = []
+        query = str(state.get("query") or "")
+        answer_confidence = state.get("answer_confidence") or state.get("sql_confidence")
+        retrieved_datapoint_count = len(state.get("retrieved_datapoints", []))
+        query_result = state.get("query_result") if isinstance(state.get("query_result"), dict) else {}
+
+        if bool(state.get("clarification_needed")) or state.get("clarifying_questions"):
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "intent",
+                    "code": "clarification_required",
+                    "message": "The run required clarification before it could proceed confidently.",
+                    "details": {"query": query, "questions": state.get("clarifying_questions", [])},
+                }
+            )
+
+        if retrieved_datapoint_count == 0:
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "retrieval",
+                    "code": "retrieval_miss",
+                    "message": "No datapoints were retrieved for this run.",
+                    "details": {
+                        "query": query,
+                        "route": state.get("route"),
+                        "retrieval_trace": state.get("retrieval_trace", {}),
+                    },
+                }
+            )
+
+        for warning in state.get("validation_warnings", []) or []:
+            if not isinstance(warning, dict):
+                continue
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "validation",
+                    "code": str(warning.get("warning_type") or "validation_warning"),
+                    "message": str(warning.get("message") or "Validation warning recorded."),
+                    "details": warning,
+                }
+            )
+
+        for error in state.get("validation_errors", []) or []:
+            if not isinstance(error, dict):
+                continue
+            findings.append(
+                {
+                    "finding_type": "error",
+                    "severity": "error",
+                    "category": "validation",
+                    "code": str(error.get("error_type") or "validation_error"),
+                    "message": str(error.get("message") or "Validation error recorded."),
+                    "details": error,
+                }
+            )
+
+        if isinstance(answer_confidence, (int, float)) and answer_confidence < 0.6:
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "answer",
+                    "code": "low_confidence_answer",
+                    "message": "The run finished with low answer confidence.",
+                    "details": {"answer_confidence": float(answer_confidence), "query": query},
+                }
+            )
+
+        if query_result and int(query_result.get("row_count", 0) or 0) == 0:
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "info",
+                    "category": "result",
+                    "code": "empty_result_set",
+                    "message": "The executed query returned zero rows.",
+                    "details": {"query": query, "generated_sql": state.get("generated_sql")},
+                }
+            )
+
+        if state.get("error") or state.get("last_error_class"):
+            findings.append(
+                {
+                    "finding_type": "error",
+                    "severity": "error",
+                    "category": "execution",
+                    "code": str(state.get("last_error_class") or "run_failed"),
+                    "message": str(state.get("error") or "The run terminated with an error."),
+                    "details": {"query": query, "route": state.get("route")},
+                }
+            )
+
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for finding in findings:
+            key = (
+                str(finding.get("severity")),
+                str(finding.get("category")),
+                str(finding.get("code")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(finding)
+        return deduped
+
     def _build_run_output(self, state: PipelineState) -> dict[str, Any]:
         query_result = state.get("query_result") if isinstance(state.get("query_result"), dict) else None
         return {
@@ -2495,6 +2609,7 @@ class DataChatPipeline:
                 started_at=state.get("run_started_at") or datetime.now(UTC),
                 completed_at=datetime.now(UTC),
                 steps=self._build_run_steps(state),
+                quality_findings=self._build_quality_findings(state),
             )
         except Exception as exc:
             logger.warning("Failed to persist pipeline run: %s", exc)

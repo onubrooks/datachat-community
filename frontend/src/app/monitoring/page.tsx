@@ -5,7 +5,11 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { DataChatAPI, type MonitoringSummaryResponse } from "@/lib/api";
+import {
+  DataChatAPI,
+  type MonitoringSummaryResponse,
+  type MonitoringTrendResponse,
+} from "@/lib/api";
 
 const api = new DataChatAPI();
 
@@ -47,6 +51,7 @@ function MetricCard({
 export default function MonitoringPage() {
   const [windowHours, setWindowHours] = useState(24);
   const [summary, setSummary] = useState<MonitoringSummaryResponse | null>(null);
+  const [trends, setTrends] = useState<MonitoringTrendResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,8 +59,12 @@ export default function MonitoringPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await api.getMonitoringSummary(hours);
-      setSummary(response);
+      const [summaryResponse, trendResponse] = await Promise.all([
+        api.getMonitoringSummary(hours),
+        api.getMonitoringTrends(hours, hours <= 24 ? 1 : 6),
+      ]);
+      setSummary(summaryResponse);
+      setTrends(trendResponse);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load monitoring summary.");
     } finally {
@@ -150,6 +159,41 @@ export default function MonitoringPage() {
             </Card>
 
             <Card className="p-5">
+              <h2 className="text-sm font-semibold text-foreground">Run Trend</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Compact bucket view for load, failures, and retrieval misses over time.
+              </p>
+              <div className="mt-4 space-y-3">
+                {(trends?.trend || []).length === 0 ? (
+                  <div className="text-sm text-muted-foreground">No trend data in this window.</div>
+                ) : (
+                  (trends?.trend || []).map((bucket) => (
+                    <div key={bucket.bucket_start} className="rounded-lg border border-border/70 p-3">
+                      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                        <span>{formatTimestamp(bucket.bucket_start)}</span>
+                        <span>{bucket.total_runs} runs</span>
+                      </div>
+                      <div className="mt-3 grid gap-2 md:grid-cols-3">
+                        <div className="rounded-md bg-muted/40 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Success</div>
+                          <div className="mt-1 text-sm font-medium text-foreground">{formatPercent(bucket.success_rate)}</div>
+                        </div>
+                        <div className="rounded-md bg-muted/40 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Retrieval Miss</div>
+                          <div className="mt-1 text-sm font-medium text-foreground">{formatPercent(bucket.retrieval_miss_rate)}</div>
+                        </div>
+                        <div className="rounded-md bg-muted/40 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">P50 Latency</div>
+                          <div className="mt-1 text-sm font-medium text-foreground">{formatDuration(bucket.p50_latency_ms)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
+
+            <Card className="p-5">
               <h2 className="text-sm font-semibold text-foreground">Recent Failures</h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 Latest failed runs in the selected time window.
@@ -196,6 +240,30 @@ export default function MonitoringPage() {
                     <div key={item.failure_class} className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2 text-sm">
                       <span className="font-medium text-foreground">{item.failure_class}</span>
                       <span className="text-muted-foreground">{item.count}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
+
+            <Card className="p-5">
+              <h2 className="text-sm font-semibold text-foreground">Top Quality Codes</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Frequent advisory signatures across runs in this window.
+              </p>
+              <div className="mt-4 space-y-2">
+                {(summary?.quality_breakdown || []).length === 0 ? (
+                  <div className="text-sm text-muted-foreground">No quality findings in this window.</div>
+                ) : (
+                  summary?.quality_breakdown.map((item) => (
+                    <div key={`${item.severity}-${item.code}`} className="rounded-md border border-border/70 px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-foreground">{item.code}</span>
+                        <span className="text-sm text-muted-foreground">{item.count}</span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        {item.severity} · {item.category}
+                      </div>
                     </div>
                   ))
                 )}

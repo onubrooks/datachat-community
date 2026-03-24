@@ -282,12 +282,6 @@ export default function SettingsPage() {
             <Button asChild variant="secondary" size="sm">
               <Link href="/">Back to Chat</Link>
             </Button>
-            <Button asChild variant="secondary" size="sm">
-              <Link href="/runs">Runs</Link>
-            </Button>
-            <Button asChild variant="secondary" size="sm">
-              <Link href="/monitoring">Monitoring</Link>
-            </Button>
           </div>
         </div>
 

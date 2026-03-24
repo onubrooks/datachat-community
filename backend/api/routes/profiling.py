@@ -256,6 +256,7 @@ async def _persist_background_run(
     output: dict,
     steps: list[dict],
     started_at: datetime,
+    quality_findings: list[dict] | None = None,
 ) -> None:
     run_store = _get_run_store()
     if run_store is None:
@@ -279,6 +280,7 @@ async def _persist_background_run(
             started_at=started_at,
             completed_at=datetime.now(UTC),
             steps=steps,
+            quality_findings=quality_findings,
         )
     except Exception as exc:
         logger.warning("Failed to persist %s run %s: %s", run_type, correlation_id, exc)
@@ -392,6 +394,23 @@ async def start_profiling_job(
                     }
                 ],
                 started_at=started_at,
+                quality_findings=(
+                    [
+                        {
+                            "finding_type": "advisory",
+                            "severity": "warning",
+                            "category": "profiling",
+                            "code": "profiling_partial",
+                            "message": "Profiling completed with skipped or failed tables.",
+                            "details": {
+                                "tables_failed": tables_failed,
+                                "tables_skipped": tables_skipped,
+                            },
+                        }
+                    ]
+                    if (tables_failed or tables_skipped)
+                    else []
+                ),
             )
         except Exception as exc:
             await store.update_job(job.job_id, status="failed", error=str(exc))
@@ -427,6 +446,16 @@ async def start_profiling_job(
                     }
                 ],
                 started_at=started_at,
+                quality_findings=[
+                    {
+                        "finding_type": "error",
+                        "severity": "error",
+                        "category": "profiling",
+                        "code": "profiling_failed",
+                        "message": str(exc),
+                        "details": {"connection_id": str(connection_id), "job_id": str(job.job_id)},
+                    }
+                ],
             )
 
     asyncio.create_task(run_job())
@@ -602,6 +631,7 @@ async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJ
                     }
                 ],
                 started_at=started_at,
+                quality_findings=[],
             )
         except Exception as exc:
             await store.update_generation_job(
@@ -642,6 +672,16 @@ async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJ
                     }
                 ],
                 started_at=started_at,
+                quality_findings=[
+                    {
+                        "finding_type": "error",
+                        "severity": "error",
+                        "category": "generation",
+                        "code": "generation_failed",
+                        "message": str(exc),
+                        "details": {"connection_id": str(profile.connection_id), "job_id": str(job.job_id)},
+                    }
+                ],
             )
 
     asyncio.create_task(run_generation())

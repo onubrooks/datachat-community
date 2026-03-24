@@ -32,6 +32,7 @@ from backend.api.routes import (
     health,
     monitoring,
     profiling,
+    quality,
     runs,
     system,
     tools,
@@ -394,6 +395,7 @@ app.include_router(datapoints.router, prefix="/api/v1", tags=["datapoints"])
 app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
 app.include_router(conversations.router, prefix="/api/v1", tags=["conversations"])
 app.include_router(runs.router, prefix="/api/v1", tags=["runs"])
+app.include_router(quality.router, prefix="/api/v1", tags=["quality"])
 app.include_router(monitoring.router, prefix="/api/v1", tags=["monitoring"])
 app.include_router(tools.router, prefix="/api/v1", tags=["tools"])
 app.include_router(websocket.router, tags=["websocket"])

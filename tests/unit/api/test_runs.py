@@ -82,6 +82,19 @@ class TestRunRoutes:
                     "created_at": datetime.now(UTC).isoformat(),
                 }
             ],
+            "quality_findings": [
+                {
+                    "finding_id": str(uuid4()),
+                    "run_id": str(run_id),
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "retrieval",
+                    "code": "retrieval_miss",
+                    "message": "No datapoints were retrieved for this run.",
+                    "details": {"query": "How many orders?"},
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            ],
         }
 
         with patch("backend.api.main.app_state", {"run_store": run_store}):
@@ -92,6 +105,7 @@ class TestRunRoutes:
         assert body["run_id"] == str(run_id)
         assert body["output"]["answer_source"] == "sql"
         assert body["steps"][0]["step_name"] == "query_analyzer"
+        assert body["quality_findings"][0]["code"] == "retrieval_miss"
 
     def test_get_run_returns_404_when_missing(self) -> None:
         run_store = AsyncMock()

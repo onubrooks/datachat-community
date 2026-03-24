@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AppMenu } from "@/components/navigation/AppMenu";
 import { ReactQueryProvider } from "@/components/providers/ReactQueryProvider";
 
 export const metadata: Metadata = {
@@ -38,7 +39,10 @@ export default function RootLayout({
         />
       </head>
       <body className="font-sans">
-        <ReactQueryProvider>{children}</ReactQueryProvider>
+        <ReactQueryProvider>
+          <AppMenu />
+          {children}
+        </ReactQueryProvider>
       </body>
     </html>
   );
