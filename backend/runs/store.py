@@ -375,6 +375,92 @@ class RunStore:
         payload["quality_findings"] = [self._row_to_quality_finding(item) for item in findings]
         return payload
 
+    async def compare_runs(
+        self, primary_run_id: UUID, comparison_run_id: UUID
+    ) -> dict[str, Any] | None:
+        primary_run = await self.get_run(primary_run_id)
+        comparison_run = await self.get_run(comparison_run_id)
+        if primary_run is None or comparison_run is None:
+            return None
+
+        primary_sql = self._extract_generated_sql_from_run(primary_run)
+        comparison_sql = self._extract_generated_sql_from_run(comparison_run)
+        primary_datapoints = self._extract_selected_datapoints_from_run(primary_run)
+        comparison_datapoints = self._extract_selected_datapoints_from_run(comparison_run)
+
+        primary_datapoint_map = {
+            self._datapoint_identity(item): item for item in primary_datapoints
+        }
+        comparison_datapoint_map = {
+            self._datapoint_identity(item): item for item in comparison_datapoints
+        }
+
+        primary_findings = primary_run.get("quality_findings", [])
+        comparison_findings = comparison_run.get("quality_findings", [])
+        primary_finding_map = {
+            self._quality_identity(item): item for item in primary_findings
+        }
+        comparison_finding_map = {
+            self._quality_identity(item): item for item in comparison_findings
+        }
+
+        primary_confidence = primary_run.get("confidence")
+        comparison_confidence = comparison_run.get("confidence")
+        confidence_delta = (
+            float(comparison_confidence) - float(primary_confidence)
+            if isinstance(primary_confidence, (int, float))
+            and isinstance(comparison_confidence, (int, float))
+            else None
+        )
+
+        primary_latency = primary_run.get("latency_ms")
+        comparison_latency = comparison_run.get("latency_ms")
+        latency_delta_ms = (
+            float(comparison_latency) - float(primary_latency)
+            if isinstance(primary_latency, (int, float))
+            and isinstance(comparison_latency, (int, float))
+            else None
+        )
+
+        return {
+            "primary_run": primary_run,
+            "comparison_run": comparison_run,
+            "diff": {
+                "sql_changed": (primary_sql or "").strip() != (comparison_sql or "").strip(),
+                "primary_sql": primary_sql,
+                "comparison_sql": comparison_sql,
+                "confidence_delta": confidence_delta,
+                "latency_delta_ms": latency_delta_ms,
+                "warning_delta": int(comparison_run.get("warning_count", 0))
+                - int(primary_run.get("warning_count", 0)),
+                "error_delta": int(comparison_run.get("error_count", 0))
+                - int(primary_run.get("error_count", 0)),
+                "status_changed": primary_run.get("status") != comparison_run.get("status"),
+                "failure_class_changed": primary_run.get("failure_class")
+                != comparison_run.get("failure_class"),
+                "datapoints_added": [
+                    item
+                    for key, item in comparison_datapoint_map.items()
+                    if key not in primary_datapoint_map
+                ],
+                "datapoints_removed": [
+                    item
+                    for key, item in primary_datapoint_map.items()
+                    if key not in comparison_datapoint_map
+                ],
+                "quality_findings_added": [
+                    item
+                    for key, item in comparison_finding_map.items()
+                    if key not in primary_finding_map
+                ],
+                "quality_findings_resolved": [
+                    item
+                    for key, item in primary_finding_map.items()
+                    if key not in comparison_finding_map
+                ],
+            },
+        }
+
     async def summarize_runs(self, *, window_hours: int = 24) -> dict[str, Any]:
         self._ensure_pool()
         bounded_window = max(1, min(window_hours, 24 * 30))
@@ -698,6 +784,58 @@ class RunStore:
             return float(values[0])
         position = max(0, min(len(values) - 1, int(round((len(values) - 1) * percentile))))
         return float(values[position])
+
+    @staticmethod
+    def _extract_generated_sql_from_run(run: dict[str, Any]) -> str | None:
+        steps = run.get("steps", [])
+        if not isinstance(steps, list):
+            return None
+        sql_step = next(
+            (step for step in steps if isinstance(step, dict) and step.get("step_name") == "sql"),
+            steps[0] if steps else None,
+        )
+        if not isinstance(sql_step, dict):
+            return None
+        summary = sql_step.get("summary", {})
+        if isinstance(summary, dict):
+            outputs = summary.get("outputs")
+            if isinstance(outputs, dict):
+                generated_sql = outputs.get("generated_sql")
+                if isinstance(generated_sql, str) and generated_sql.strip():
+                    return generated_sql
+            direct = summary.get("generated_sql")
+            if isinstance(direct, str) and direct.strip():
+                return direct
+        return None
+
+    @staticmethod
+    def _extract_selected_datapoints_from_run(
+        run: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        output = run.get("output", {})
+        if not isinstance(output, dict):
+            return []
+        retrieval_trace = output.get("retrieval_trace", {})
+        if not isinstance(retrieval_trace, dict):
+            return []
+        selected = retrieval_trace.get("selected_datapoints", [])
+        if not isinstance(selected, list):
+            return []
+        return [item for item in selected if isinstance(item, dict)]
+
+    @staticmethod
+    def _datapoint_identity(item: dict[str, Any]) -> str:
+        datapoint_id = item.get("datapoint_id")
+        if isinstance(datapoint_id, str) and datapoint_id.strip():
+            return datapoint_id
+        name = item.get("name")
+        if isinstance(name, str) and name.strip():
+            return name
+        return json.dumps(item, sort_keys=True, default=str)
+
+    @staticmethod
+    def _quality_identity(item: dict[str, Any]) -> str:
+        return f"{item.get('code')}::{item.get('message')}"
 
     @classmethod
     def _row_to_run_summary(cls, row: asyncpg.Record) -> dict[str, Any]:

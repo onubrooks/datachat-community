@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   DataChatAPI,
+  type RunComparisonDiffResponse,
   type RunDetailResponse,
   type RunStepResponse,
   type RunSummaryResponse,
@@ -123,10 +124,6 @@ function datapointIdentity(item: Record<string, unknown>): string {
   return compactJson(item);
 }
 
-function qualityIdentity(item: { code: string; message: string }): string {
-  return `${item.code}::${item.message}`;
-}
-
 function formatSignedNumber(value?: number | null, digits: number = 2): string {
   if (typeof value !== "number" || Number.isNaN(value)) return "n/a";
   const prefix = value > 0 ? "+" : "";
@@ -149,6 +146,7 @@ export default function RunsPage() {
   const [selectedRun, setSelectedRun] = useState<RunDetailResponse | null>(null);
   const [compareRunId, setCompareRunId] = useState<string | null>(null);
   const [compareRun, setCompareRun] = useState<RunDetailResponse | null>(null);
+  const [compareDiff, setCompareDiff] = useState<RunComparisonDiffResponse | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab | "compare">("overview");
   const [loading, setLoading] = useState(true);
@@ -180,6 +178,7 @@ export default function RunsPage() {
   useEffect(() => {
     if (!selectedRunId) {
       setSelectedRun(null);
+      setCompareDiff(null);
       setSelectedStepId(null);
       return;
     }
@@ -210,6 +209,7 @@ export default function RunsPage() {
   useEffect(() => {
     if (!compareRunId || compareRunId === selectedRunId) {
       setCompareRun(null);
+      setCompareDiff(null);
       setCompareError(null);
       if (compareRunId === selectedRunId) {
         setCompareRunId(null);
@@ -221,13 +221,15 @@ export default function RunsPage() {
       setCompareLoading(true);
       setCompareError(null);
       try {
-        const response = await api.getRun(compareRunId);
+        const response = await api.getRunComparison(selectedRunId, compareRunId);
         if (!cancelled) {
-          setCompareRun(response);
+          setCompareRun(response.comparison_run);
+          setCompareDiff(response.diff);
         }
       } catch (err) {
         if (!cancelled) {
           setCompareError(err instanceof Error ? err.message : "Failed to load comparison run.");
+          setCompareDiff(null);
         }
       } finally {
         if (!cancelled) setCompareLoading(false);
@@ -314,41 +316,17 @@ export default function RunsPage() {
   const primaryDatapoints = extractSelectedDatapoints(selectedRun);
   const comparisonDatapoints = extractSelectedDatapoints(compareRun);
   const compareCandidates = runs.filter((run) => run.run_id !== selectedRunId);
-  const datapointDiff = useMemo(() => {
-    const primaryMap = new Map(primaryDatapoints.map((item) => [datapointIdentity(item), item]));
-    const comparisonMap = new Map(
-      comparisonDatapoints.map((item) => [datapointIdentity(item), item])
-    );
-    return {
-      added: comparisonDatapoints.filter((item) => !primaryMap.has(datapointIdentity(item))),
-      removed: primaryDatapoints.filter((item) => !comparisonMap.has(datapointIdentity(item))),
-    };
-  }, [primaryDatapoints, comparisonDatapoints]);
-  const findingDiff = useMemo(() => {
-    const primaryMap = new Map(
-      selectedRun?.quality_findings.map((item) => [qualityIdentity(item), item]) || []
-    );
-    const comparisonMap = new Map(
-      compareRun?.quality_findings.map((item) => [qualityIdentity(item), item]) || []
-    );
-    return {
-      added:
-        compareRun?.quality_findings.filter((item) => !primaryMap.has(qualityIdentity(item))) || [],
-      removed:
-        selectedRun?.quality_findings.filter((item) => !comparisonMap.has(qualityIdentity(item))) ||
-        [],
-    };
-  }, [selectedRun, compareRun]);
-  const confidenceDelta =
-    typeof compareRun?.confidence === "number" && typeof selectedRun?.confidence === "number"
-      ? compareRun.confidence - selectedRun.confidence
-      : null;
-  const latencyDelta =
-    typeof compareRun?.latency_ms === "number" && typeof selectedRun?.latency_ms === "number"
-      ? compareRun.latency_ms - selectedRun.latency_ms
-      : null;
-  const sqlChanged =
-    compareRun && selectedRun ? (primarySql || "").trim() !== (comparisonSql || "").trim() : false;
+  const datapointDiff = {
+    added: compareDiff?.datapoints_added || [],
+    removed: compareDiff?.datapoints_removed || [],
+  };
+  const findingDiff = {
+    added: compareDiff?.quality_findings_added || [],
+    removed: compareDiff?.quality_findings_resolved || [],
+  };
+  const confidenceDelta = compareDiff?.confidence_delta ?? null;
+  const latencyDelta = compareDiff?.latency_delta_ms ?? null;
+  const sqlChanged = compareDiff?.sql_changed ?? false;
 
   return (
     <main className="min-h-screen bg-background">
@@ -877,13 +855,13 @@ export default function RunsPage() {
                         <Card className="p-4">
                           <SectionTitle title="Generated SQL" subtitle="Primary run SQL payload." />
                           <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
-                            {primarySql || "No generated SQL captured for this run."}
+                            {compareDiff?.primary_sql || primarySql || "No generated SQL captured for this run."}
                           </pre>
                         </Card>
                         <Card className="p-4">
                           <SectionTitle title="Generated SQL" subtitle="Comparison run SQL payload." />
                           <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
-                            {comparisonSql || "No generated SQL captured for this run."}
+                            {compareDiff?.comparison_sql || comparisonSql || "No generated SQL captured for this run."}
                           </pre>
                         </Card>
                       </div>

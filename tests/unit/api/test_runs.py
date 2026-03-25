@@ -107,6 +107,70 @@ class TestRunRoutes:
         assert body["steps"][0]["step_name"] == "query_analyzer"
         assert body["quality_findings"][0]["code"] == "retrieval_miss"
 
+    def test_compare_runs_returns_backend_diff(self) -> None:
+        primary_run_id = uuid4()
+        comparison_run_id = uuid4()
+        run_store = AsyncMock()
+        run_store.compare_runs.return_value = {
+            "primary_run": {
+                "run_id": str(primary_run_id),
+                "run_type": "chat",
+                "status": "completed",
+                "route": "sql",
+                "summary": {"query": "How many orders?"},
+                "output": {},
+                "steps": [],
+                "quality_findings": [],
+            },
+            "comparison_run": {
+                "run_id": str(comparison_run_id),
+                "run_type": "chat",
+                "status": "completed",
+                "route": "sql",
+                "summary": {"query": "How many orders?"},
+                "output": {},
+                "steps": [],
+                "quality_findings": [],
+            },
+            "diff": {
+                "sql_changed": True,
+                "primary_sql": "select 1",
+                "comparison_sql": "select count(*) from orders",
+                "confidence_delta": 0.12,
+                "latency_delta_ms": -14.0,
+                "warning_delta": -1,
+                "error_delta": 0,
+                "status_changed": False,
+                "failure_class_changed": False,
+                "datapoints_added": [{"datapoint_id": "dp_new"}],
+                "datapoints_removed": [],
+                "quality_findings_added": [],
+                "quality_findings_resolved": [],
+            },
+        }
+
+        with patch("backend.api.main.app_state", {"run_store": run_store}):
+            response = self.client.get(
+                f"/api/v1/runs/compare?primary_run_id={primary_run_id}&comparison_run_id={comparison_run_id}"
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["diff"]["sql_changed"] is True
+        assert body["diff"]["datapoints_added"][0]["datapoint_id"] == "dp_new"
+
+    def test_compare_runs_rejects_same_run_id(self) -> None:
+        run_id = uuid4()
+        run_store = AsyncMock()
+
+        with patch("backend.api.main.app_state", {"run_store": run_store}):
+            response = self.client.get(
+                f"/api/v1/runs/compare?primary_run_id={run_id}&comparison_run_id={run_id}"
+            )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Comparison run must be different from primary run"
+
     def test_get_run_returns_404_when_missing(self) -> None:
         run_store = AsyncMock()
         run_store.get_run.return_value = None

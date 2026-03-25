@@ -520,6 +520,28 @@ export interface RunListResponse {
   runs: RunSummaryResponse[];
 }
 
+export interface RunComparisonDiffResponse {
+  sql_changed: boolean;
+  primary_sql?: string | null;
+  comparison_sql?: string | null;
+  confidence_delta?: number | null;
+  latency_delta_ms?: number | null;
+  warning_delta: number;
+  error_delta: number;
+  status_changed: boolean;
+  failure_class_changed: boolean;
+  datapoints_added: Array<Record<string, unknown>>;
+  datapoints_removed: Array<Record<string, unknown>>;
+  quality_findings_added: QualityFindingResponse[];
+  quality_findings_resolved: QualityFindingResponse[];
+}
+
+export interface RunComparisonResponse {
+  primary_run: RunDetailResponse;
+  comparison_run: RunDetailResponse;
+  diff: RunComparisonDiffResponse;
+}
+
 export interface MonitoringRouteBreakdown {
   route: string;
   count: number;
@@ -679,6 +701,21 @@ export class DataChatAPI {
 
     if (!response.ok) {
       throw new Error(`Run detail failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getRunComparison(
+    primaryRunId: string,
+    comparisonRunId: string
+  ): Promise<RunComparisonResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/runs/compare?primary_run_id=${encodeURIComponent(primaryRunId)}&comparison_run_id=${encodeURIComponent(comparisonRunId)}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Run comparison failed: ${response.statusText}`);
     }
 
     return response.json();

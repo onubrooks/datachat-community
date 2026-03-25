@@ -65,6 +65,28 @@ class RunListResponse(BaseModel):
     runs: list[RunSummaryResponse] = Field(default_factory=list)
 
 
+class RunComparisonDiffResponse(BaseModel):
+    sql_changed: bool = False
+    primary_sql: str | None = None
+    comparison_sql: str | None = None
+    confidence_delta: float | None = None
+    latency_delta_ms: float | None = None
+    warning_delta: int = 0
+    error_delta: int = 0
+    status_changed: bool = False
+    failure_class_changed: bool = False
+    datapoints_added: list[dict] = Field(default_factory=list)
+    datapoints_removed: list[dict] = Field(default_factory=list)
+    quality_findings_added: list[QualityFindingResponse] = Field(default_factory=list)
+    quality_findings_resolved: list[QualityFindingResponse] = Field(default_factory=list)
+
+
+class RunComparisonResponse(BaseModel):
+    primary_run: RunDetailResponse
+    comparison_run: RunDetailResponse
+    diff: RunComparisonDiffResponse
+
+
 def _get_run_store():
     from backend.api.main import app_state
 
@@ -82,6 +104,23 @@ async def list_runs(limit: int = 50) -> RunListResponse:
     store = _get_run_store()
     runs = await store.list_runs(limit=limit)
     return RunListResponse(runs=runs)
+
+
+@router.get("/runs/compare", response_model=RunComparisonResponse)
+async def compare_runs(primary_run_id: UUID, comparison_run_id: UUID) -> RunComparisonResponse:
+    if primary_run_id == comparison_run_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Comparison run must be different from primary run",
+        )
+    store = _get_run_store()
+    payload = await store.compare_runs(primary_run_id, comparison_run_id)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or both runs were not found",
+        )
+    return RunComparisonResponse(**payload)
 
 
 @router.get("/runs/{run_id}", response_model=RunDetailResponse)
