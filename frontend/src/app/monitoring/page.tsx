@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -203,6 +204,14 @@ export default function MonitoringPage() {
                         <div className="text-xs text-muted-foreground">{formatTimestamp(failure.created_at)}</div>
                       </div>
                       <div className="mt-2 text-[11px] text-muted-foreground">Run ID: {failure.run_id}</div>
+                      <div className="mt-3">
+                        <Link
+                          href={`/runs?run_id=${encodeURIComponent(failure.run_id)}`}
+                          className="text-xs font-medium text-foreground underline-offset-4 hover:underline"
+                        >
+                          Open run
+                        </Link>
+                      </div>
                     </div>
                   ))
                 )}
@@ -226,10 +235,14 @@ export default function MonitoringPage() {
                   <div className="text-sm text-muted-foreground">No failure classes in this window.</div>
                 ) : (
                   (summary?.failure_breakdown || []).map((item) => (
-                    <div key={item.failure_class} className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2 text-sm">
+                    <Link
+                      key={item.failure_class}
+                      href={`/runs?failure_class=${encodeURIComponent(item.failure_class)}`}
+                      className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2 text-sm transition hover:bg-muted/40"
+                    >
                       <span className="font-medium text-foreground">{item.failure_class}</span>
                       <span className="text-muted-foreground">{item.count}</span>
-                    </div>
+                    </Link>
                   ))
                 )}
               </div>
@@ -245,7 +258,11 @@ export default function MonitoringPage() {
                   <div className="text-sm text-muted-foreground">No quality findings in this window.</div>
                 ) : (
                   summary?.quality_breakdown.map((item) => (
-                    <div key={`${item.severity}-${item.code}`} className="rounded-md border border-border/70 px-3 py-2">
+                    <Link
+                      key={`${item.severity}-${item.code}`}
+                      href={`/quality?code=${encodeURIComponent(item.code)}`}
+                      className="block rounded-md border border-border/70 px-3 py-2 transition hover:bg-muted/40"
+                    >
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-sm font-medium text-foreground">{item.code}</span>
                         <span className="text-sm text-muted-foreground">{item.count}</span>
@@ -253,7 +270,7 @@ export default function MonitoringPage() {
                       <div className="mt-1 text-[11px] text-muted-foreground">
                         {item.severity} · {item.category}
                       </div>
-                    </div>
+                    </Link>
                   ))
                 )}
               </div>

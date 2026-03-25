@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DataChatAPI, type QualitySummaryResponse } from "@/lib/api";
@@ -33,10 +35,14 @@ function MetricCard({
 }
 
 export default function QualityPage() {
+  const searchParams = useSearchParams();
   const [windowHours, setWindowHours] = useState(24);
   const [summary, setSummary] = useState<QualitySummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [severityFilter, setSeverityFilter] = useState(searchParams.get("severity") || "all");
+  const [categoryFilter, setCategoryFilter] = useState(searchParams.get("category") || "all");
+  const [codeFilter, setCodeFilter] = useState(searchParams.get("code") || "all");
 
   const loadSummary = async (hours: number) => {
     setLoading(true);
@@ -57,6 +63,23 @@ export default function QualityPage() {
 
   const severityCount = (severity: string) =>
     summary?.severity_breakdown.find((item) => item.severity === severity)?.count ?? 0;
+
+  useEffect(() => {
+    setSeverityFilter(searchParams.get("severity") || "all");
+    setCategoryFilter(searchParams.get("category") || "all");
+    setCodeFilter(searchParams.get("code") || "all");
+  }, [searchParams]);
+
+  const filteredFindings = useMemo(
+    () =>
+      (summary?.recent_findings || []).filter((finding) => {
+        if (severityFilter !== "all" && finding.severity !== severityFilter) return false;
+        if (categoryFilter !== "all" && finding.category !== categoryFilter) return false;
+        if (codeFilter !== "all" && finding.code !== codeFilter) return false;
+        return true;
+      }),
+    [summary, severityFilter, categoryFilter, codeFilter]
+  );
 
   return (
     <main className="min-h-screen bg-background">
@@ -103,15 +126,74 @@ export default function QualityPage() {
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-6">
             <Card className="p-5">
+              <h2 className="text-sm font-semibold text-foreground">Filters</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Narrow findings by severity, category, or code before jumping into affected runs.
+              </p>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <select
+                  value={severityFilter}
+                  onChange={(event) => setSeverityFilter(event.target.value)}
+                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="all">All severities</option>
+                  {(summary?.severity_breakdown || []).map((item) => (
+                    <option key={item.severity} value={item.severity}>
+                      {item.severity}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="all">All categories</option>
+                  {(summary?.category_breakdown || []).map((item) => (
+                    <option key={item.category} value={item.category}>
+                      {item.category}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={codeFilter}
+                  onChange={(event) => setCodeFilter(event.target.value)}
+                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="all">All codes</option>
+                  {(summary?.code_breakdown || []).map((item) => (
+                    <option key={item.code} value={item.code}>
+                      {item.code}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="mt-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSeverityFilter("all");
+                    setCategoryFilter("all");
+                    setCodeFilter("all");
+                  }}
+                >
+                  Clear Filters
+                </Button>
+              </div>
+            </Card>
+
+            <Card className="p-5">
               <h2 className="text-sm font-semibold text-foreground">Recent Findings</h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 Latest advisories captured from chat, profiling, and generation runs.
               </p>
               <div className="mt-4 space-y-3">
-                {(summary?.recent_findings || []).length === 0 ? (
+                {filteredFindings.length === 0 ? (
                   <div className="text-sm text-muted-foreground">No findings in this window.</div>
                 ) : (
-                  (summary?.recent_findings || []).map((finding) => (
+                  filteredFindings.map((finding) => (
                     <div key={finding.finding_id} className="rounded-lg border border-border/70 p-4">
                       <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                         <div>
@@ -124,6 +206,14 @@ export default function QualityPage() {
                       </div>
                       <div className="mt-2 text-xs text-muted-foreground">
                         {finding.route} {finding.query ? `· ${finding.query}` : ""}
+                      </div>
+                      <div className="mt-3">
+                        <Link
+                          href={`/runs?run_id=${encodeURIComponent(finding.run_id)}`}
+                          className="text-xs font-medium text-foreground underline-offset-4 hover:underline"
+                        >
+                          Open affected run
+                        </Link>
                       </div>
                     </div>
                   ))
@@ -143,7 +233,14 @@ export default function QualityPage() {
                   <div className="text-sm text-muted-foreground">No code breakdown available.</div>
                 ) : (
                   (summary?.code_breakdown || []).map((item) => (
-                    <div key={item.code} className="rounded-md border border-border/70 px-3 py-2">
+                    <button
+                      key={item.code}
+                      type="button"
+                      onClick={() => setCodeFilter(item.code)}
+                      className={`w-full rounded-md border px-3 py-2 text-left ${
+                        codeFilter === item.code ? "border-primary bg-primary/5" : "border-border/70"
+                      }`}
+                    >
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-sm font-medium text-foreground">{item.code}</span>
                         <span className="text-sm text-muted-foreground">{item.count}</span>
@@ -151,7 +248,7 @@ export default function QualityPage() {
                       <div className="mt-1 text-[11px] text-muted-foreground">
                         {item.severity} · {item.category}
                       </div>
-                    </div>
+                    </button>
                   ))
                 )}
               </div>

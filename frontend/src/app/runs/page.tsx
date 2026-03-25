@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -114,7 +115,35 @@ function extractSelectedDatapoints(run: RunDetailResponse | null): Array<Record<
     : [];
 }
 
+function datapointIdentity(item: Record<string, unknown>): string {
+  const datapointId = item.datapoint_id;
+  if (typeof datapointId === "string" && datapointId.trim()) return datapointId;
+  const name = item.name;
+  if (typeof name === "string" && name.trim()) return name;
+  return compactJson(item);
+}
+
+function qualityIdentity(item: { code: string; message: string }): string {
+  return `${item.code}::${item.message}`;
+}
+
+function formatSignedNumber(value?: number | null, digits: number = 2): string {
+  if (typeof value !== "number" || Number.isNaN(value)) return "n/a";
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${value.toFixed(digits)}`;
+}
+
+function summarizeChange(delta?: number | null, inverse: boolean = false): string {
+  if (typeof delta !== "number" || Number.isNaN(delta) || delta === 0) return "unchanged";
+  const improved = inverse ? delta < 0 : delta > 0;
+  return improved ? "improved" : "regressed";
+}
+
 export default function RunsPage() {
+  const searchParams = useSearchParams();
+  const failureClassFilter = searchParams.get("failure_class");
+  const routeFilter = searchParams.get("route");
+  const focusRunId = searchParams.get("run_id");
   const [runs, setRuns] = useState<RunSummaryResponse[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<RunDetailResponse | null>(null);
@@ -145,8 +174,8 @@ export default function RunsPage() {
   };
 
   useEffect(() => {
-    void loadRuns();
-  }, []);
+    void loadRuns(focusRunId);
+  }, [focusRunId]);
 
   useEffect(() => {
     if (!selectedRunId) {
@@ -210,12 +239,37 @@ export default function RunsPage() {
     };
   }, [compareRunId, selectedRunId]);
 
+  const filteredRuns = useMemo(
+    () =>
+      runs.filter((run) => {
+        if (focusRunId && run.run_id !== focusRunId) return false;
+        if (failureClassFilter && run.failure_class !== failureClassFilter) {
+          return false;
+        }
+        if (routeFilter && run.route !== routeFilter) {
+          return false;
+        }
+        return true;
+      }),
+    [runs, focusRunId, failureClassFilter, routeFilter]
+  );
+
+  useEffect(() => {
+    if (!filteredRuns.length) {
+      setSelectedRunId(null);
+      return;
+    }
+    if (!selectedRunId || !filteredRuns.some((run) => run.run_id === selectedRunId)) {
+      setSelectedRunId(filteredRuns[0].run_id);
+    }
+  }, [filteredRuns, selectedRunId]);
+
   const stats = useMemo(() => {
-    const total = runs.length;
-    const completed = runs.filter((run) => run.status === "completed").length;
-    const failed = runs.filter((run) => run.status === "failed").length;
+    const total = filteredRuns.length;
+    const completed = filteredRuns.filter((run) => run.status === "completed").length;
+    const failed = filteredRuns.filter((run) => run.status === "failed").length;
     const medianLatency = (() => {
-      const values = runs
+      const values = filteredRuns
         .map((run) => run.latency_ms)
         .filter((value): value is number => typeof value === "number")
         .sort((a, b) => a - b);
@@ -224,7 +278,7 @@ export default function RunsPage() {
       return values.length % 2 === 0 ? (values[mid - 1] + values[mid]) / 2 : values[mid];
     })();
     return { total, completed, failed, medianLatency };
-  }, [runs]);
+  }, [filteredRuns]);
 
   const selectedStep = useMemo(() => {
     if (!selectedRun || !selectedStepId) return selectedRun?.steps[0] || null;
@@ -260,6 +314,41 @@ export default function RunsPage() {
   const primaryDatapoints = extractSelectedDatapoints(selectedRun);
   const comparisonDatapoints = extractSelectedDatapoints(compareRun);
   const compareCandidates = runs.filter((run) => run.run_id !== selectedRunId);
+  const datapointDiff = useMemo(() => {
+    const primaryMap = new Map(primaryDatapoints.map((item) => [datapointIdentity(item), item]));
+    const comparisonMap = new Map(
+      comparisonDatapoints.map((item) => [datapointIdentity(item), item])
+    );
+    return {
+      added: comparisonDatapoints.filter((item) => !primaryMap.has(datapointIdentity(item))),
+      removed: primaryDatapoints.filter((item) => !comparisonMap.has(datapointIdentity(item))),
+    };
+  }, [primaryDatapoints, comparisonDatapoints]);
+  const findingDiff = useMemo(() => {
+    const primaryMap = new Map(
+      selectedRun?.quality_findings.map((item) => [qualityIdentity(item), item]) || []
+    );
+    const comparisonMap = new Map(
+      compareRun?.quality_findings.map((item) => [qualityIdentity(item), item]) || []
+    );
+    return {
+      added:
+        compareRun?.quality_findings.filter((item) => !primaryMap.has(qualityIdentity(item))) || [],
+      removed:
+        selectedRun?.quality_findings.filter((item) => !comparisonMap.has(qualityIdentity(item))) ||
+        [],
+    };
+  }, [selectedRun, compareRun]);
+  const confidenceDelta =
+    typeof compareRun?.confidence === "number" && typeof selectedRun?.confidence === "number"
+      ? compareRun.confidence - selectedRun.confidence
+      : null;
+  const latencyDelta =
+    typeof compareRun?.latency_ms === "number" && typeof selectedRun?.latency_ms === "number"
+      ? compareRun.latency_ms - selectedRun.latency_ms
+      : null;
+  const sqlChanged =
+    compareRun && selectedRun ? (primarySql || "").trim() !== (comparisonSql || "").trim() : false;
 
   return (
     <main className="min-h-screen bg-background">
@@ -296,6 +385,17 @@ export default function RunsPage() {
           <Card className="border-destructive/40 p-4 text-sm text-destructive">{error}</Card>
         ) : null}
 
+        {failureClassFilter || routeFilter || focusRunId ? (
+          <Card className="border-border/70 bg-muted/20 p-4 text-sm">
+            <div className="font-medium text-foreground">Filtered run view</div>
+            <div className="mt-1 text-muted-foreground">
+              {failureClassFilter ? `Failure class: ${failureClassFilter}. ` : ""}
+              {routeFilter ? `Route: ${routeFilter}. ` : ""}
+              {focusRunId ? `Focused run: ${focusRunId}.` : ""}
+            </div>
+          </Card>
+        ) : null}
+
         <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
           <Card className="overflow-hidden">
             <div className="border-b border-border/70 px-5 py-4">
@@ -307,13 +407,13 @@ export default function RunsPage() {
             <div className="max-h-[74vh] overflow-y-auto">
               {loading ? (
                 <div className="p-5 text-sm text-muted-foreground">Loading runs...</div>
-              ) : runs.length === 0 ? (
+              ) : filteredRuns.length === 0 ? (
                 <div className="p-5 text-sm text-muted-foreground">
-                  No runs recorded yet. Ask a question or run profiling/generation first.
+                  No runs match the active filters. Broaden the filter or create more activity first.
                 </div>
               ) : (
                 <div className="divide-y divide-border/70">
-                  {runs.map((run) => {
+                  {filteredRuns.map((run) => {
                     const active = run.run_id === selectedRunId;
                     return (
                       <button
@@ -628,6 +728,29 @@ export default function RunsPage() {
                     </div>
                   ) : (
                     <>
+                      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                        <MetricCard
+                          label="SQL"
+                          value={sqlChanged ? "changed" : "unchanged"}
+                          helper="Generated SQL between the two runs"
+                        />
+                        <MetricCard
+                          label="Confidence Delta"
+                          value={formatSignedNumber(confidenceDelta)}
+                          helper={summarizeChange(confidenceDelta)}
+                        />
+                        <MetricCard
+                          label="Latency Delta"
+                          value={formatSignedNumber(latencyDelta, 0)}
+                          helper={summarizeChange(latencyDelta, true)}
+                        />
+                        <MetricCard
+                          label="Quality Delta"
+                          value={`${findingDiff.added.length} added / ${findingDiff.removed.length} removed`}
+                          helper="Compared against the primary run"
+                        />
+                      </div>
+
                       <div className="grid gap-4 md:grid-cols-2">
                         <Card className="p-4">
                           <SectionTitle title="Primary Run" subtitle={formatTimestamp(selectedRun.created_at)} />
@@ -648,6 +771,107 @@ export default function RunsPage() {
                           </div>
                         </Card>
                       </div>
+
+                      <Card className="p-4">
+                        <SectionTitle
+                          title="What Changed"
+                          subtitle="Quick diff for retries, training updates, and alternate answer paths."
+                        />
+                        <div className="mt-4 grid gap-4 md:grid-cols-2">
+                          <div className="rounded-lg border border-border/70 p-4">
+                            <div className="text-sm font-semibold text-foreground">Datapoints</div>
+                            <div className="mt-3 space-y-3 text-sm">
+                              <div>
+                                <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
+                                  Added In Comparison
+                                </div>
+                                <div className="mt-2 space-y-2">
+                                  {datapointDiff.added.length === 0 ? (
+                                    <div className="text-muted-foreground">No added datapoints.</div>
+                                  ) : (
+                                    datapointDiff.added.map((item, index) => (
+                                      <div
+                                        key={`${datapointIdentity(item)}-${index}-added`}
+                                        className="rounded-md bg-muted/40 px-3 py-2 text-foreground"
+                                      >
+                                        {String(item.name || item.datapoint_id || "unknown")}
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
+                                  Removed From Comparison
+                                </div>
+                                <div className="mt-2 space-y-2">
+                                  {datapointDiff.removed.length === 0 ? (
+                                    <div className="text-muted-foreground">No removed datapoints.</div>
+                                  ) : (
+                                    datapointDiff.removed.map((item, index) => (
+                                      <div
+                                        key={`${datapointIdentity(item)}-${index}-removed`}
+                                        className="rounded-md bg-muted/40 px-3 py-2 text-foreground"
+                                      >
+                                        {String(item.name || item.datapoint_id || "unknown")}
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="rounded-lg border border-border/70 p-4">
+                            <div className="text-sm font-semibold text-foreground">Quality Findings</div>
+                            <div className="mt-3 space-y-3 text-sm">
+                              <div>
+                                <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
+                                  Added In Comparison
+                                </div>
+                                <div className="mt-2 space-y-2">
+                                  {findingDiff.added.length === 0 ? (
+                                    <div className="text-muted-foreground">No new findings.</div>
+                                  ) : (
+                                    findingDiff.added.map((finding) => (
+                                      <div
+                                        key={`${finding.finding_id}-added`}
+                                        className="rounded-md bg-muted/40 px-3 py-2"
+                                      >
+                                        <div className="text-foreground">{finding.message}</div>
+                                        <div className="mt-1 text-xs text-muted-foreground">
+                                          {finding.severity} · {finding.code}
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
+                                  Resolved In Comparison
+                                </div>
+                                <div className="mt-2 space-y-2">
+                                  {findingDiff.removed.length === 0 ? (
+                                    <div className="text-muted-foreground">No findings resolved.</div>
+                                  ) : (
+                                    findingDiff.removed.map((finding) => (
+                                      <div
+                                        key={`${finding.finding_id}-removed`}
+                                        className="rounded-md bg-muted/40 px-3 py-2"
+                                      >
+                                        <div className="text-foreground">{finding.message}</div>
+                                        <div className="mt-1 text-xs text-muted-foreground">
+                                          {finding.severity} · {finding.code}
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
 
                       <div className="grid gap-4 md:grid-cols-2">
                         <Card className="p-4">
