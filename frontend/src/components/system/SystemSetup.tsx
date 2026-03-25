@@ -64,6 +64,13 @@ export function SystemSetup({
               Use the onboarding wizard for the fastest path. It guides connection,
               profiling, metadata generation, approval, and retrieval sync in one flow.
             </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Before onboarding: set your chat provider key in{" "}
+              <Link href="/settings" className="underline underline-offset-2">
+                Settings
+              </Link>
+              . For embeddings, also set <code>LLM_OPENAI_API_KEY</code>.
+            </p>
           </div>
         </div>
 
