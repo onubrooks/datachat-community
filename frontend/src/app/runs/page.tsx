@@ -95,16 +95,39 @@ function compactJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+function runTitle(run: RunSummaryResponse | RunDetailResponse | null): string {
+  if (!run) return "n/a";
+  return String(run.summary?.query || run.route || run.run_type);
+}
+
+function extractRunGeneratedSql(run: RunDetailResponse | null): string | null {
+  if (!run) return null;
+  const sqlStep = run.steps.find((step) => step.step_name === "sql") || run.steps[0] || null;
+  return extractGeneratedSql(sqlStep);
+}
+
+function extractSelectedDatapoints(run: RunDetailResponse | null): Array<Record<string, unknown>> {
+  if (!run) return [];
+  const trace = (run.output?.retrieval_trace || {}) as Record<string, unknown>;
+  return Array.isArray(trace.selected_datapoints)
+    ? (trace.selected_datapoints as Array<Record<string, unknown>>)
+    : [];
+}
+
 export default function RunsPage() {
   const [runs, setRuns] = useState<RunSummaryResponse[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<RunDetailResponse | null>(null);
+  const [compareRunId, setCompareRunId] = useState<string | null>(null);
+  const [compareRun, setCompareRun] = useState<RunDetailResponse | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<DetailTab>("overview");
+  const [activeTab, setActiveTab] = useState<DetailTab | "compare">("overview");
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [compareLoading, setCompareLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [compareError, setCompareError] = useState<string | null>(null);
 
   const loadRuns = async (preferredRunId?: string | null) => {
     setLoading(true);
@@ -155,6 +178,38 @@ export default function RunsPage() {
     };
   }, [selectedRunId]);
 
+  useEffect(() => {
+    if (!compareRunId || compareRunId === selectedRunId) {
+      setCompareRun(null);
+      setCompareError(null);
+      if (compareRunId === selectedRunId) {
+        setCompareRunId(null);
+      }
+      return;
+    }
+    let cancelled = false;
+    const loadCompareRun = async () => {
+      setCompareLoading(true);
+      setCompareError(null);
+      try {
+        const response = await api.getRun(compareRunId);
+        if (!cancelled) {
+          setCompareRun(response);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setCompareError(err instanceof Error ? err.message : "Failed to load comparison run.");
+        }
+      } finally {
+        if (!cancelled) setCompareLoading(false);
+      }
+    };
+    void loadCompareRun();
+    return () => {
+      cancelled = true;
+    };
+  }, [compareRunId, selectedRunId]);
+
   const stats = useMemo(() => {
     const total = runs.length;
     const completed = runs.filter((run) => run.status === "completed").length;
@@ -200,6 +255,11 @@ export default function RunsPage() {
     ? liveSchemaFilter.filtered_out
     : [];
   const generatedSql = extractGeneratedSql(selectedStep);
+  const primarySql = extractRunGeneratedSql(selectedRun);
+  const comparisonSql = extractRunGeneratedSql(compareRun);
+  const primaryDatapoints = extractSelectedDatapoints(selectedRun);
+  const comparisonDatapoints = extractSelectedDatapoints(compareRun);
+  const compareCandidates = runs.filter((run) => run.run_id !== selectedRunId);
 
   return (
     <main className="min-h-screen bg-background">
@@ -301,7 +361,7 @@ export default function RunsPage() {
                 <div className="space-y-1">
                   <SectionTitle
                     title="Run Detail"
-                    subtitle="Overview, steps, and retrieval diagnostics."
+                    subtitle="Overview, steps, retrieval diagnostics, and before/after comparison."
                   />
                   {selectedRun ? (
                     <div className="text-xs text-muted-foreground">
@@ -311,11 +371,31 @@ export default function RunsPage() {
                 </div>
                 {selectedRun ? <StatusPill value={selectedRun.status} /> : null}
               </div>
+              {selectedRun ? (
+                <div className="mt-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="text-xs text-muted-foreground">
+                    Compare the selected run against a prior retry, training attempt, or alternate answer path.
+                  </div>
+                  <select
+                    value={compareRunId || ""}
+                    onChange={(event) => setCompareRunId(event.target.value || null)}
+                    className="h-9 min-w-[280px] rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    <option value="">No comparison selected</option>
+                    {compareCandidates.map((run) => (
+                      <option key={run.run_id} value={run.run_id}>
+                        {runTitle(run)} · {formatTimestamp(run.created_at)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
               <div className="mt-4 flex flex-wrap gap-2 rounded-lg border border-border/70 bg-muted/20 p-1">
                 {([
                   { key: "overview", label: "Overview" },
                   { key: "steps", label: "Steps" },
                   { key: "retrieval", label: "Retrieval" },
+                  { key: "compare", label: "Compare" },
                 ] as const).map((tab) => (
                   <Button
                     key={tab.key}
@@ -465,7 +545,7 @@ export default function RunsPage() {
                     )}
                   </div>
                 </div>
-              ) : (
+              ) : activeTab === "retrieval" ? (
                 <div className="space-y-6">
                   <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                     <MetricCard label="Vector" value={formatCount(vectorCandidates.length)} helper="Semantic candidates" />
@@ -529,6 +609,146 @@ export default function RunsPage() {
                       {compactJson(retrievalTrace)}
                     </pre>
                   </Card>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {compareLoading ? (
+                    <div className="text-sm text-muted-foreground">Loading comparison run...</div>
+                  ) : compareError ? (
+                    <div className="text-sm text-destructive">{compareError}</div>
+                  ) : !compareRun ? (
+                    <div className="text-sm text-muted-foreground">
+                      Select a comparison run from the dropdown above to inspect before/after changes.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Card className="p-4">
+                          <SectionTitle title="Primary Run" subtitle={formatTimestamp(selectedRun.created_at)} />
+                          <div className="mt-3 space-y-2 text-sm text-foreground">
+                            <div>{runTitle(selectedRun)}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {selectedRun.route || "n/a"} · {formatDuration(selectedRun.latency_ms)} · confidence {selectedRun.confidence?.toFixed(2) || "n/a"}
+                            </div>
+                          </div>
+                        </Card>
+                        <Card className="p-4">
+                          <SectionTitle title="Comparison Run" subtitle={formatTimestamp(compareRun.created_at)} />
+                          <div className="mt-3 space-y-2 text-sm text-foreground">
+                            <div>{runTitle(compareRun)}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {compareRun.route || "n/a"} · {formatDuration(compareRun.latency_ms)} · confidence {compareRun.confidence?.toFixed(2) || "n/a"}
+                            </div>
+                          </div>
+                        </Card>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Card className="p-4">
+                          <SectionTitle title="Generated SQL" subtitle="Primary run SQL payload." />
+                          <pre className="mt-3 overflow-x-auto rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
+                            {primarySql || "No generated SQL captured for this run."}
+                          </pre>
+                        </Card>
+                        <Card className="p-4">
+                          <SectionTitle title="Generated SQL" subtitle="Comparison run SQL payload." />
+                          <pre className="mt-3 overflow-x-auto rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
+                            {comparisonSql || "No generated SQL captured for this run."}
+                          </pre>
+                        </Card>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Card className="p-4">
+                          <SectionTitle
+                            title="Selected Datapoints"
+                            subtitle={`Primary run selected ${primaryDatapoints.length} datapoint(s).`}
+                          />
+                          <div className="mt-3 space-y-2">
+                            {primaryDatapoints.length === 0 ? (
+                              <div className="text-sm text-muted-foreground">No selected datapoints.</div>
+                            ) : (
+                              primaryDatapoints.map((item, index) => (
+                                <div key={`${String(item.datapoint_id || index)}-primary`} className="rounded-md border border-border/70 p-3">
+                                  <div className="text-sm font-medium text-foreground">
+                                    {String(item.name || item.datapoint_id || "unknown")}
+                                  </div>
+                                  <div className="mt-1 text-xs text-muted-foreground">
+                                    {String(item.source || "unknown")}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </Card>
+                        <Card className="p-4">
+                          <SectionTitle
+                            title="Selected Datapoints"
+                            subtitle={`Comparison run selected ${comparisonDatapoints.length} datapoint(s).`}
+                          />
+                          <div className="mt-3 space-y-2">
+                            {comparisonDatapoints.length === 0 ? (
+                              <div className="text-sm text-muted-foreground">No selected datapoints.</div>
+                            ) : (
+                              comparisonDatapoints.map((item, index) => (
+                                <div key={`${String(item.datapoint_id || index)}-comparison`} className="rounded-md border border-border/70 p-3">
+                                  <div className="text-sm font-medium text-foreground">
+                                    {String(item.name || item.datapoint_id || "unknown")}
+                                  </div>
+                                  <div className="mt-1 text-xs text-muted-foreground">
+                                    {String(item.source || "unknown")}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </Card>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Card className="p-4">
+                          <SectionTitle
+                            title="Quality Findings"
+                            subtitle={`Primary run findings: ${selectedRun.quality_findings.length}`}
+                          />
+                          <div className="mt-3 space-y-2">
+                            {selectedRun.quality_findings.length === 0 ? (
+                              <div className="text-sm text-muted-foreground">No findings recorded.</div>
+                            ) : (
+                              selectedRun.quality_findings.map((finding) => (
+                                <div key={finding.finding_id} className="rounded-md border border-border/70 p-3">
+                                  <div className="text-sm font-medium text-foreground">{finding.message}</div>
+                                  <div className="mt-1 text-xs text-muted-foreground">
+                                    {finding.severity} · {finding.category} · {finding.code}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </Card>
+                        <Card className="p-4">
+                          <SectionTitle
+                            title="Quality Findings"
+                            subtitle={`Comparison run findings: ${compareRun.quality_findings.length}`}
+                          />
+                          <div className="mt-3 space-y-2">
+                            {compareRun.quality_findings.length === 0 ? (
+                              <div className="text-sm text-muted-foreground">No findings recorded.</div>
+                            ) : (
+                              compareRun.quality_findings.map((finding) => (
+                                <div key={finding.finding_id} className="rounded-md border border-border/70 p-3">
+                                  <div className="text-sm font-medium text-foreground">{finding.message}</div>
+                                  <div className="mt-1 text-xs text-muted-foreground">
+                                    {finding.severity} · {finding.category} · {finding.code}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </Card>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
