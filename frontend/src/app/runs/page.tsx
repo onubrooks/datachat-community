@@ -371,25 +371,6 @@ export default function RunsPage() {
                 </div>
                 {selectedRun ? <StatusPill value={selectedRun.status} /> : null}
               </div>
-              {selectedRun ? (
-                <div className="mt-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="text-xs text-muted-foreground">
-                    Compare the selected run against a prior retry, training attempt, or alternate answer path.
-                  </div>
-                  <select
-                    value={compareRunId || ""}
-                    onChange={(event) => setCompareRunId(event.target.value || null)}
-                    className="h-9 min-w-[280px] rounded-md border border-input bg-background px-3 text-sm"
-                  >
-                    <option value="">No comparison selected</option>
-                    {compareCandidates.map((run) => (
-                      <option key={run.run_id} value={run.run_id}>
-                        {runTitle(run)} · {formatTimestamp(run.created_at)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : null}
               <div className="mt-4 flex flex-wrap gap-2 rounded-lg border border-border/70 bg-muted/20 p-1">
                 {([
                   { key: "overview", label: "Overview" },
@@ -612,13 +593,38 @@ export default function RunsPage() {
                 </div>
               ) : (
                 <div className="space-y-6">
+                  <Card className="p-4">
+                    <SectionTitle
+                      title="Choose Comparison Run"
+                      subtitle="Compare this run against a retry, training update, or alternate answer path."
+                    />
+                    <div className="mt-3 space-y-3">
+                      <select
+                        value={compareRunId || ""}
+                        onChange={(event) => setCompareRunId(event.target.value || null)}
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      >
+                        <option value="">No comparison selected</option>
+                        {compareCandidates.map((run) => (
+                          <option key={run.run_id} value={run.run_id}>
+                            {runTitle(run)} · {formatTimestamp(run.created_at)}
+                          </option>
+                        ))}
+                      </select>
+                      {compareCandidates.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">
+                          You need at least one additional run before comparison is available.
+                        </div>
+                      ) : null}
+                    </div>
+                  </Card>
                   {compareLoading ? (
                     <div className="text-sm text-muted-foreground">Loading comparison run...</div>
                   ) : compareError ? (
                     <div className="text-sm text-destructive">{compareError}</div>
                   ) : !compareRun ? (
                     <div className="text-sm text-muted-foreground">
-                      Select a comparison run from the dropdown above to inspect before/after changes.
+                      Select a comparison run above to inspect before/after changes.
                     </div>
                   ) : (
                     <>
