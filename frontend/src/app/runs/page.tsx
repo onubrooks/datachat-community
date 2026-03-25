@@ -355,8 +355,8 @@ export default function RunsPage() {
             </div>
           </Card>
 
-          <Card className="overflow-hidden xl:sticky xl:top-6 xl:max-h-[82vh]">
-            <div className="border-b border-border/70 px-5 py-4">
+          <Card className="overflow-hidden xl:sticky xl:top-6 xl:flex xl:max-h-[calc(100vh-3rem)] xl:flex-col">
+            <div className="shrink-0 border-b border-border/70 px-5 py-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="space-y-1">
                   <SectionTitle
@@ -410,7 +410,7 @@ export default function RunsPage() {
               </div>
             </div>
 
-            <div className="max-h-[68vh] overflow-y-auto p-5">
+            <div className="min-h-0 overflow-y-auto p-5 xl:flex-1">
               {detailLoading ? (
                 <div className="text-sm text-muted-foreground">Loading run detail...</div>
               ) : detailError ? (
