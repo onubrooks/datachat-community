@@ -17,6 +17,7 @@ Ship `datachat-community` with a stable, usable foundation for data teams evalua
 ## Explicitly Out of Scope for v0.1.0
 
 - Proprietary workflow packs and premium enterprise automation layers
+- Enterprise document-context extensions (V2/V3): remote connectors, ACL retrieval, and doc-data linking
 - Internal strategy, GTM, and roadmap planning documents
 - Internal evaluation artifacts not needed by OSS users
 
@@ -41,3 +42,9 @@ Ship `datachat-community` with a stable, usable foundation for data teams evalua
   - Schema datapoints
   - Process datapoints
 - Keep managed lifecycle + approval semantics consistent across all datapoint types.
+- Document Context V1 (community): local docs/PDF/web ingestion with cited retrieval.
+
+Enterprise/private lane (not in community v0.1):
+
+- Document Context V2: Confluence/Drive/S3 connectors + sync operations.
+- Document Context V3: ACL-aware retrieval + doc-data relationship graph + feedback reranking.

@@ -283,8 +283,9 @@ class ValidatorAgent(BaseAgent):
         errors: list[SQLValidationError] = []
 
         # Check for SQL injection patterns
+        regex_flags = re.IGNORECASE | re.MULTILINE | re.DOTALL
         for pattern in self.INJECTION_PATTERNS:
-            if re.search(pattern, sql, re.IGNORECASE | re.MULTILINE):
+            if re.search(pattern, sql, regex_flags):
                 errors.append(
                     SQLValidationError(
                         error_type="security",
