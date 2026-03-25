@@ -249,6 +249,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
             pipeline = DataChatPipeline(
                 retriever=retriever,
                 connector=connector,
+                run_store=app_state.get("run_store"),
                 max_retries=3,
             )
             app_state["connector"] = connector
@@ -325,6 +326,7 @@ async def chat(request: Request, chat_request: ChatRequest) -> ChatResponse:
         )
 
         response = ChatResponse(
+            run_id=result.get("run_id"),
             answer=answer,
             clarifying_questions=result.get("clarifying_questions", []),
             sql=sql_query,

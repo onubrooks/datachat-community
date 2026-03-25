@@ -18,6 +18,11 @@ from backend.profiling.models import (
 )
 
 _DEFAULT_OWNER = "auto-profiler@datachat.ai"
+_DEFAULT_EXCLUSIONS = "No explicit exclusions documented by auto-profiler."
+_DEFAULT_CONFIDENCE_NOTES = (
+    "Auto-generated datapoint. Human validation is recommended before "
+    "production-critical use."
+)
 
 
 class DataPointGenerator:
@@ -104,6 +109,38 @@ class DataPointGenerator:
                 metadata = {}
                 payload["metadata"] = metadata
             metadata["connection_id"] = connection_id
+            DataPointGenerator._ensure_contract_metadata(payload)
+
+    @staticmethod
+    def _ensure_contract_metadata(payload: dict[str, object]) -> None:
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            payload["metadata"] = metadata
+
+        datapoint_type = str(payload.get("type") or "").strip().lower()
+        default_grain = {
+            "schema": "row-level",
+            "business": "table-level",
+            "process": "workflow-level",
+            "query": "query-level",
+        }.get(datapoint_type, "unknown")
+
+        grain = metadata.get("grain")
+        if not isinstance(grain, str) or not grain.strip():
+            metadata["grain"] = default_grain
+
+        exclusions = metadata.get("exclusions")
+        if not isinstance(exclusions, str) or not exclusions.strip():
+            metadata["exclusions"] = _DEFAULT_EXCLUSIONS
+
+        confidence_notes = metadata.get("confidence_notes")
+        if not isinstance(confidence_notes, str) or not confidence_notes.strip():
+            metadata["confidence_notes"] = _DEFAULT_CONFIDENCE_NOTES
+
+        freshness = metadata.get("freshness")
+        if not isinstance(freshness, str) or not freshness.strip():
+            metadata["freshness"] = "unknown"
 
     @staticmethod
     def _sanitize_row_count(value: int | None) -> int | None:
@@ -125,11 +162,8 @@ class DataPointGenerator:
             "table_key": table_key,
             "grain": grain,
             "freshness": freshness,
-            "exclusions": "No explicit exclusions documented by auto-profiler.",
-            "confidence_notes": (
-                "Auto-generated datapoint. Human validation is recommended "
-                "before production-critical use."
-            ),
+            "exclusions": _DEFAULT_EXCLUSIONS,
+            "confidence_notes": _DEFAULT_CONFIDENCE_NOTES,
         }
 
     @staticmethod
@@ -206,7 +240,23 @@ class DataPointGenerator:
             "measure_columns": measures[:12],
             "time_columns": time_columns[:8],
             "display_hints": display_hints,
+            "profiled_columns": self._build_profile_column_snapshot(table.columns),
         }
+
+    @staticmethod
+    def _build_profile_column_snapshot(columns: list[ColumnProfile]) -> list[dict[str, object]]:
+        snapshot: list[dict[str, object]] = []
+        for column in columns[:25]:
+            snapshot.append(
+                {
+                    "name": column.name,
+                    "type": column.data_type,
+                    "distinct_count": column.distinct_count,
+                    "sample_values": [str(value) for value in (column.sample_values or [])[:5]],
+                    "null_count": column.null_count,
+                }
+            )
+        return snapshot
 
     def _build_metric_semantic_metadata(
         self, table: TableProfile, aggregation: str | None
@@ -241,6 +291,8 @@ class DataPointGenerator:
     ) -> GeneratedDataPoint:
         system_prompt = (
             "You are a data analyst helping document a database table. "
+            "Use domain-neutral language suitable for finance, operations, product, "
+            "support, and growth teams. "
             "Return ONLY valid JSON."
         )
         user_prompt = self._build_schema_prompt(table)
@@ -381,6 +433,8 @@ class DataPointGenerator:
 
         system_prompt = (
             "You are a data analyst defining KPIs from numeric columns. "
+            "Prefer practical metrics that fit any domain (finance, product, support, operations), "
+            "not finance-only assumptions. "
             "Return ONLY valid JSON."
         )
         user_prompt = self._build_metric_prompt(table, numeric_columns)
@@ -618,17 +672,37 @@ class DataPointGenerator:
     ) -> dict:
         system_prompt = (
             "You are a data analyst defining KPIs from numeric columns. "
+            "Prefer practical metrics that fit any domain (finance, product, support, operations), "
+            "not finance-only assumptions. "
             "Return ONLY valid JSON."
         )
         batch_payload = {
             "tables": [
                 {
                     "table": f"{table.schema_name}.{table.name}",
+                    "row_count_estimate": self._sanitize_row_count(table.row_count),
                     "numeric_columns": [
-                        col.name
+                        {
+                            "name": col.name,
+                            "type": col.data_type,
+                            "distinct_count": col.distinct_count,
+                            "sample_values": [str(v) for v in col.sample_values[:5]],
+                            "min_value": col.min_value,
+                            "max_value": col.max_value,
+                        }
                         for col in table.columns
                         if self._is_numeric_type(col.data_type)
                     ],
+                    "categorical_context": [
+                        {
+                            "name": col.name,
+                            "type": col.data_type,
+                            "distinct_count": col.distinct_count,
+                            "sample_values": [str(v) for v in col.sample_values[:5]],
+                        }
+                        for col in table.columns
+                        if not self._is_numeric_type(col.data_type)
+                    ][:8],
                 }
                 for table in tables
             ],
@@ -694,10 +768,31 @@ class DataPointGenerator:
 
     @staticmethod
     def _fallback_column_meaning(name: str, samples: Iterable[str]) -> str:
+        normalized = name.lower()
         sample_preview = ", ".join(list(samples)[:3])
+        base = f"Auto-profiled column `{name}`."
+        if normalized == "id" or normalized.endswith("_id"):
+            base = f"Identifier column for `{name}`."
+        elif any(token in normalized for token in ["created", "updated", "timestamp", "date", "time"]):
+            base = f"Timestamp/date column `{name}` used for time-based analysis."
+        elif any(token in normalized for token in ["status", "state"]):
+            base = f"Lifecycle status column `{name}`."
+        elif any(token in normalized for token in ["type", "category", "segment"]):
+            base = f"Classification column `{name}`."
+        elif any(token in normalized for token in ["amount", "price", "cost", "revenue"]):
+            base = f"Monetary value column `{name}`."
+        elif any(token in normalized for token in ["qty", "quantity", "count", "volume"]):
+            base = f"Volume/count column `{name}`."
+        elif any(token in normalized for token in ["email", "phone", "contact"]):
+            base = f"Contact information column `{name}`."
+        elif any(token in normalized for token in ["country", "region", "city", "state_code"]):
+            base = f"Geographic attribute column `{name}`."
+        elif normalized.startswith("is_") or normalized.startswith("has_") or normalized.endswith("_flag"):
+            base = f"Boolean flag column `{name}`."
+
         if sample_preview:
-            return f"Values such as {sample_preview}."
-        return f"Auto-profiled column {name}."
+            return f"{base} Example values: {sample_preview}."
+        return base
 
     @staticmethod
     def _ensure_min_length(value: str, length: int) -> str:
@@ -738,8 +833,16 @@ class DataPointGenerator:
             hints = "Stores people or account records."
         elif any(token in name_lower for token in ["order", "invoice", "payment"]):
             hints = "Captures transactional records."
-        elif any(token in name_lower for token in ["event", "log", "activity"]):
-            hints = "Tracks events or activity logs."
+        elif any(token in name_lower for token in ["ticket", "case", "incident", "support"]):
+            hints = "Tracks support cases, incidents, or customer requests."
+        elif any(token in name_lower for token in ["event", "log", "activity", "audit"]):
+            hints = "Captures application or user activity events."
+        elif any(token in name_lower for token in ["lead", "campaign", "attribution", "funnel"]):
+            hints = "Stores growth or marketing funnel signals."
+        elif any(token in name_lower for token in ["inventory", "stock", "warehouse", "shipment"]):
+            hints = "Tracks inventory and operational movement."
+        elif any(token in name_lower for token in ["subscription", "plan", "billing"]):
+            hints = "Stores subscription lifecycle and billing information."
         elif any(token in name_lower for token in ["product", "item", "catalog"]):
             hints = "Holds product or catalog details."
         elif any(token in name_lower for token in ["session", "visit"]):
@@ -781,7 +884,11 @@ class DataPointGenerator:
                 "name": col.name,
                 "type": col.data_type,
                 "nullable": col.nullable,
-                "samples": col.sample_values[:3],
+                "sample_values": [str(value) for value in col.sample_values[:5]],
+                "distinct_count": col.distinct_count,
+                "null_count": col.null_count,
+                "min_value": col.min_value,
+                "max_value": col.max_value,
             }
             for col in table.columns
         ]
@@ -838,7 +945,10 @@ class DataPointGenerator:
             {
                 "name": col.name,
                 "type": col.data_type,
-                "samples": col.sample_values[:3],
+                "sample_values": [str(value) for value in col.sample_values[:5]],
+                "distinct_count": col.distinct_count,
+                "min_value": col.min_value,
+                "max_value": col.max_value,
             }
             for col in numeric_columns
         ]

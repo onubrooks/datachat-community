@@ -180,6 +180,7 @@ class SystemInitializer:
                 self._app_state["pipeline"] = DataChatPipeline(
                     retriever=retriever,
                     connector=connector,
+                    run_store=self._app_state.get("run_store"),
                     max_retries=3,
                 )
 

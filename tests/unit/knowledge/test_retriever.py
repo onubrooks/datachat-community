@@ -336,6 +336,46 @@ class TestLocalMode:
         assert "table_grocery_products_user_001" in ids
         assert "table_grocery_products_managed_001" not in ids
 
+    @pytest.mark.asyncio
+    async def test_local_mode_emits_trace_and_precedence_filtering(
+        self, retriever, mock_vector_store
+    ):
+        mock_vector_store.search.return_value = [
+            {
+                "datapoint_id": "table_orders_managed_001",
+                "distance": 0.01,
+                "metadata": {
+                    "name": "Orders (Managed)",
+                    "type": "Schema",
+                    "schema": "public",
+                    "table_name": "orders",
+                    "source_tier": "managed",
+                },
+                "document": "managed orders context",
+            },
+            {
+                "datapoint_id": "table_orders_user_001",
+                "distance": 0.03,
+                "metadata": {
+                    "name": "Orders (User)",
+                    "type": "Schema",
+                    "schema": "public",
+                    "table_name": "orders",
+                    "source_tier": "user",
+                },
+                "document": "user orders context",
+            },
+        ]
+
+        result = await retriever.retrieve("orders", mode=RetrievalMode.LOCAL, top_k=1)
+
+        assert result.trace["mode"] == "local"
+        assert len(result.trace["vector_candidates"]) == 2
+        assert result.trace["final_selected"][0]["datapoint_id"] == "table_orders_user_001"
+        assert result.trace["precedence"]["filtered_out"][0]["datapoint_id"] == (
+            "table_orders_managed_001"
+        )
+
 
 class TestGlobalMode:
     """Test global (graph-only) retrieval mode."""
@@ -592,6 +632,26 @@ class TestHybridMode:
         assert len(result.items) > 0
         sources = {item.source for item in result.items}
         assert "hybrid" in sources or ("vector" in sources and "graph" in sources)
+
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_emits_rrf_and_seed_trace(
+        self,
+        retriever,
+        mock_vector_store,
+        mock_knowledge_graph,
+        sample_vector_results,
+        sample_graph_results,
+    ):
+        mock_vector_store.search.return_value = sample_vector_results
+        mock_knowledge_graph.get_related.return_value = sample_graph_results
+
+        result = await retriever.retrieve("sales data", mode=RetrievalMode.HYBRID, top_k=5)
+
+        assert result.trace["mode"] == "hybrid"
+        assert result.trace["graph_seed_node"] == "table_sales_001"
+        assert len(result.trace["vector_candidates"]) == len(sample_vector_results)
+        assert len(result.trace["graph_candidates"]) == len(sample_graph_results)
+        assert len(result.trace["rrf_candidates"]) >= 1
 
 
 class TestRRFAlgorithm:

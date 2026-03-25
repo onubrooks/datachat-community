@@ -44,6 +44,10 @@ class RetrievalResult(BaseModel):
     total_count: int = Field(..., description="Total number of items retrieved")
     mode: RetrievalMode = Field(..., description="Retrieval mode used")
     query: str = Field(..., description="Original query")
+    trace: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured retrieval diagnostics and candidate traces.",
+    )
 
 
 class RetrieverError(Exception):
@@ -141,11 +145,11 @@ class Retriever:
         try:
             retrieval_top_k = max(top_k, top_k * self._precedence_pool_multiplier)
             if mode == RetrievalMode.LOCAL:
-                items = await self._retrieve_local(query, retrieval_top_k, metadata_filter)
+                items, mode_trace = await self._retrieve_local(query, retrieval_top_k, metadata_filter)
             elif mode == RetrievalMode.GLOBAL:
-                items = await self._retrieve_global(query, retrieval_top_k, graph_max_depth)
+                items, mode_trace = await self._retrieve_global(query, retrieval_top_k, graph_max_depth)
             elif mode == RetrievalMode.HYBRID:
-                items = await self._retrieve_hybrid(
+                items, mode_trace = await self._retrieve_hybrid(
                     query,
                     retrieval_top_k,
                     vector_top_k or retrieval_top_k * 2,
@@ -156,7 +160,7 @@ class Retriever:
             else:
                 raise RetrieverError(f"Unknown retrieval mode: {mode}")
 
-            prioritized_items = self._apply_source_precedence(items)
+            prioritized_items, precedence_trace = self._apply_source_precedence(items)
             final_items = prioritized_items[:top_k]
 
             logger.info(
@@ -171,6 +175,20 @@ class Retriever:
                 total_count=len(final_items),
                 mode=mode,
                 query=query,
+                trace={
+                    "mode": str(mode),
+                    "requested_top_k": top_k,
+                    "retrieval_pool_top_k": retrieval_top_k,
+                    "metadata_filter": metadata_filter or {},
+                    "candidate_counts": {
+                        "initial": len(items),
+                        "after_precedence": len(prioritized_items),
+                        "final": len(final_items),
+                    },
+                    **mode_trace,
+                    "precedence": precedence_trace,
+                    "final_selected": [self._item_to_trace_payload(item) for item in final_items],
+                },
             )
 
         except Exception as e:
@@ -179,13 +197,14 @@ class Retriever:
 
     async def _retrieve_local(
         self, query: str, top_k: int, metadata_filter: dict[str, Any] | None = None
-    ) -> list[RetrievedItem]:
+    ) -> tuple[list[RetrievedItem], dict[str, Any]]:
         """Retrieve using vector search only."""
         vector_results = await self.vector_store.search(
             query, top_k=top_k, filter_metadata=metadata_filter
         )
 
         items = []
+        trace_candidates: list[dict[str, Any]] = []
         for result in vector_results:
             # Convert distance to similarity score (cosine distance: lower is better)
             # Score = 1 / (1 + distance), normalized to 0-1 range
@@ -205,18 +224,30 @@ class Retriever:
                     content=result.get("document"),
                 )
             )
+            trace_candidates.append(
+                {
+                    "datapoint_id": result["datapoint_id"],
+                    "distance": distance,
+                    "score": score,
+                    "source": "vector",
+                    "name": metadata.get("name", result["datapoint_id"]),
+                    "source_tier": metadata.get("source_tier"),
+                    "rank": len(trace_candidates) + 1,
+                }
+            )
 
         logger.debug(f"Vector search returned {len(items)} items")
-        return items
+        return items, {"vector_candidates": trace_candidates}
 
     async def _retrieve_global(
         self, node_id: str, top_k: int, max_depth: int
-    ) -> list[RetrievedItem]:
+    ) -> tuple[list[RetrievedItem], dict[str, Any]]:
         """Retrieve using graph traversal only."""
         # Get related nodes from graph
         related_nodes = self.knowledge_graph.get_related(node_id, max_depth=max_depth)
 
         items = []
+        trace_candidates: list[dict[str, Any]] = []
         for node in related_nodes[:top_k]:
             # Convert distance to score (graph distance: 1 is closest)
             # Score = 1 / distance, normalized
@@ -232,9 +263,20 @@ class Retriever:
                     content=None,  # Graph doesn't have document content
                 )
             )
+            trace_candidates.append(
+                {
+                    "datapoint_id": node["node_id"],
+                    "distance": distance,
+                    "score": score,
+                    "source": "graph",
+                    "name": node.get("metadata", {}).get("name", node["node_id"]),
+                    "source_tier": node.get("metadata", {}).get("source_tier"),
+                    "rank": len(trace_candidates) + 1,
+                }
+            )
 
         logger.debug(f"Graph traversal returned {len(items)} items")
-        return items
+        return items, {"graph_candidates": trace_candidates}
 
     async def _retrieve_hybrid(
         self,
@@ -244,7 +286,7 @@ class Retriever:
         graph_top_k: int,
         graph_max_depth: int,
         metadata_filter: dict[str, Any] | None = None,
-    ) -> list[RetrievedItem]:
+    ) -> tuple[list[RetrievedItem], dict[str, Any]]:
         """Retrieve using both vector and graph, combined with RRF."""
         # Get vector results
         vector_results = await self.vector_store.search(
@@ -252,6 +294,7 @@ class Retriever:
         )
 
         vector_items = {}
+        vector_trace_candidates: list[dict[str, Any]] = []
         for rank, result in enumerate(vector_results, start=1):
             datapoint_id = result["datapoint_id"]
             distance = result["distance"]
@@ -267,9 +310,22 @@ class Retriever:
                 "metadata": metadata,
                 "content": result.get("document"),
             }
+            vector_trace_candidates.append(
+                {
+                    "datapoint_id": datapoint_id,
+                    "rank": rank,
+                    "distance": distance,
+                    "score": score,
+                    "name": metadata.get("name", datapoint_id),
+                    "source_tier": metadata.get("source_tier"),
+                }
+            )
 
         # Get graph results by trying vector results as seed nodes
         graph_items = {}
+        graph_trace_candidates: list[dict[str, Any]] = []
+        seed_node_used: str | None = None
+        graph_fallback_reason: str | None = None
         if vector_results:
             # Try each vector result as a seed until we get graph results
             # This handles cases where top results aren't in the graph
@@ -282,6 +338,7 @@ class Retriever:
                     )
 
                     # Successfully got results, build graph items
+                    seed_node_used = seed_node
                     for rank, node in enumerate(related_nodes[:graph_top_k], start=1):
                         datapoint_id = node["node_id"]
                         distance = node["distance"]
@@ -293,6 +350,16 @@ class Retriever:
                             "metadata": node["metadata"],
                             "content": None,
                         }
+                        graph_trace_candidates.append(
+                            {
+                                "datapoint_id": datapoint_id,
+                                "rank": rank,
+                                "distance": distance,
+                                "score": score,
+                                "name": node["metadata"].get("name", datapoint_id),
+                                "source_tier": node["metadata"].get("source_tier"),
+                            }
+                        )
 
                     # Successfully retrieved graph results, stop trying
                     logger.debug(f"Graph seeded from node: {seed_node}")
@@ -312,11 +379,13 @@ class Retriever:
                     graph_stats = {}
                 total_nodes = int(graph_stats.get("total_nodes", 0) or 0)
                 if total_nodes == 0:
+                    graph_fallback_reason = "empty_graph"
                     logger.info(
                         "Knowledge graph is empty; using vector-only retrieval for query '%s...'",
                         query[:60],
                     )
                 else:
+                    graph_fallback_reason = "seed_traversal_failed"
                     logger.warning(
                         f"All {len(vector_results)} seed candidates failed graph traversal, "
                         "using vector-only results"
@@ -363,7 +432,34 @@ class Retriever:
             f"→ {len(items)} final items"
         )
 
-        return items
+        rrf_trace_candidates: list[dict[str, Any]] = []
+        for datapoint_id, rrf_score in sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True):
+            rrf_trace_candidates.append(
+                {
+                    "datapoint_id": datapoint_id,
+                    "rrf_score": rrf_score,
+                    "vector_rank": vector_items.get(datapoint_id, {}).get("rank"),
+                    "graph_rank": graph_items.get(datapoint_id, {}).get("rank"),
+                    "source": (
+                        "hybrid"
+                        if datapoint_id in vector_items and datapoint_id in graph_items
+                        else ("vector" if datapoint_id in vector_items else "graph")
+                    ),
+                    "name": (
+                        graph_items.get(datapoint_id, {}).get("metadata", {}).get("name")
+                        or vector_items.get(datapoint_id, {}).get("metadata", {}).get("name")
+                        or datapoint_id
+                    ),
+                }
+            )
+
+        return items, {
+            "vector_candidates": vector_trace_candidates,
+            "graph_candidates": graph_trace_candidates,
+            "rrf_candidates": rrf_trace_candidates,
+            "graph_seed_node": seed_node_used,
+            "graph_fallback_reason": graph_fallback_reason,
+        }
 
     def _enrich_with_graph_metadata(
         self,
@@ -427,7 +523,9 @@ class Retriever:
 
         return rrf_scores
 
-    def _apply_source_precedence(self, items: list[RetrievedItem]) -> list[RetrievedItem]:
+    def _apply_source_precedence(
+        self, items: list[RetrievedItem]
+    ) -> tuple[list[RetrievedItem], dict[str, Any]]:
         """
         Resolve conflicting DataPoints by source tier, then keep rank-based ordering.
 
@@ -438,10 +536,11 @@ class Retriever:
         - Items without a conflict key are kept as-is.
         """
         if not items:
-            return []
+            return [], {"kept": [], "filtered_out": []}
 
         resolved_by_key: dict[str, RetrievedItem] = {}
         passthrough: list[RetrievedItem] = []
+        filtered_out: list[dict[str, Any]] = []
 
         for item in items:
             conflict_key = self._build_conflict_key(item)
@@ -457,10 +556,39 @@ class Retriever:
             existing_priority = self._source_priority(existing.metadata)
             candidate_priority = self._source_priority(item.metadata)
             if candidate_priority > existing_priority:
+                filtered_out.append(
+                    {
+                        "datapoint_id": existing.datapoint_id,
+                        "reason": "source_precedence_conflict",
+                        "conflict_key": conflict_key,
+                        "kept_datapoint_id": item.datapoint_id,
+                    }
+                )
                 resolved_by_key[conflict_key] = item
                 continue
             if candidate_priority == existing_priority and item.score > existing.score:
+                filtered_out.append(
+                    {
+                        "datapoint_id": existing.datapoint_id,
+                        "reason": "lower_score_same_precedence",
+                        "conflict_key": conflict_key,
+                        "kept_datapoint_id": item.datapoint_id,
+                    }
+                )
                 resolved_by_key[conflict_key] = item
+                continue
+            filtered_out.append(
+                {
+                    "datapoint_id": item.datapoint_id,
+                    "reason": (
+                        "lower_source_precedence"
+                        if candidate_priority < existing_priority
+                        else "lower_score_same_precedence"
+                    ),
+                    "conflict_key": conflict_key,
+                    "kept_datapoint_id": existing.datapoint_id,
+                }
+            )
 
         combined = passthrough + list(resolved_by_key.values())
         combined.sort(
@@ -470,7 +598,22 @@ class Retriever:
             ),
             reverse=True,
         )
-        return combined
+        return combined, {
+            "kept": [self._item_to_trace_payload(item) for item in combined],
+            "filtered_out": filtered_out,
+        }
+
+    @staticmethod
+    def _item_to_trace_payload(item: RetrievedItem) -> dict[str, Any]:
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        return {
+            "datapoint_id": item.datapoint_id,
+            "name": metadata.get("name", item.datapoint_id),
+            "score": item.score,
+            "source": item.source,
+            "source_tier": metadata.get("source_tier"),
+            "conflict_key": None,
+        }
 
     def _build_conflict_key(self, item: RetrievedItem) -> str | None:
         """Build a coarse conflict key for precedence handling."""

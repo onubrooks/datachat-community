@@ -56,6 +56,7 @@ export interface ValidationWarning {
 }
 
 export interface ChatResponse {
+  run_id?: string | null;
   answer: string;
   clarifying_questions?: string[];
   sub_answers?: {
@@ -465,6 +466,173 @@ export interface SyncStatusResponse {
   error: string | null;
 }
 
+export interface RunStepResponse {
+  step_id: string;
+  step_order: number;
+  step_name: string;
+  status: string;
+  latency_ms?: number | null;
+  summary: Record<string, unknown>;
+  created_at?: string | null;
+}
+
+export interface QualityFindingResponse {
+  finding_id: string;
+  run_id: string;
+  finding_type: string;
+  severity: string;
+  category: string;
+  code: string;
+  message: string;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  details: Record<string, unknown>;
+  created_at?: string | null;
+}
+
+export interface RunSummaryResponse {
+  run_id: string;
+  run_type: string;
+  status: string;
+  route?: string | null;
+  connection_id?: string | null;
+  conversation_id?: string | null;
+  correlation_id?: string | null;
+  failure_class?: string | null;
+  confidence?: number | null;
+  warning_count: number;
+  error_count: number;
+  latency_ms?: number | null;
+  summary: Record<string, unknown>;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface RunDetailResponse extends RunSummaryResponse {
+  output: Record<string, unknown>;
+  steps: RunStepResponse[];
+  quality_findings: QualityFindingResponse[];
+}
+
+export interface RunListResponse {
+  runs: RunSummaryResponse[];
+}
+
+export interface RunComparisonDiffResponse {
+  sql_changed: boolean;
+  primary_sql?: string | null;
+  comparison_sql?: string | null;
+  confidence_delta?: number | null;
+  latency_delta_ms?: number | null;
+  warning_delta: number;
+  error_delta: number;
+  status_changed: boolean;
+  failure_class_changed: boolean;
+  datapoints_added: Array<Record<string, unknown>>;
+  datapoints_removed: Array<Record<string, unknown>>;
+  quality_findings_added: QualityFindingResponse[];
+  quality_findings_resolved: QualityFindingResponse[];
+}
+
+export interface RunComparisonResponse {
+  primary_run: RunDetailResponse;
+  comparison_run: RunDetailResponse;
+  diff: RunComparisonDiffResponse;
+}
+
+export interface MonitoringRouteBreakdown {
+  route: string;
+  count: number;
+  success_rate: number;
+  failed: number;
+}
+
+export interface MonitoringFailureBreakdown {
+  failure_class: string;
+  count: number;
+}
+
+export interface MonitoringQualityBreakdown {
+  severity: string;
+  category: string;
+  code: string;
+  count: number;
+}
+
+export interface MonitoringRecentFailure {
+  run_id: string;
+  route: string;
+  failure_class?: string | null;
+  query: string;
+  created_at: string;
+}
+
+export interface MonitoringSummaryResponse {
+  window_hours: number;
+  total_runs: number;
+  completed_runs: number;
+  failed_runs: number;
+  success_rate: number;
+  p50_latency_ms?: number | null;
+  p95_latency_ms?: number | null;
+  clarification_rate: number;
+  retrieval_miss_rate: number;
+  route_breakdown: MonitoringRouteBreakdown[];
+  failure_breakdown: MonitoringFailureBreakdown[];
+  quality_breakdown: MonitoringQualityBreakdown[];
+  recent_failures: MonitoringRecentFailure[];
+}
+
+export interface MonitoringTrendBucket {
+  bucket_start: string;
+  total_runs: number;
+  failed_runs: number;
+  success_rate: number;
+  p50_latency_ms?: number | null;
+  clarification_rate: number;
+  retrieval_miss_rate: number;
+}
+
+export interface MonitoringTrendResponse {
+  window_hours: number;
+  bucket_hours: number;
+  trend: MonitoringTrendBucket[];
+}
+
+export interface QualitySeverityBreakdown {
+  severity: string;
+  count: number;
+}
+
+export interface QualityCategoryBreakdown {
+  category: string;
+  count: number;
+}
+
+export interface QualityCodeBreakdown {
+  code: string;
+  severity: string;
+  category: string;
+  count: number;
+}
+
+export interface QualityRecentFinding extends QualityFindingResponse {
+  route: string;
+  query?: string | null;
+}
+
+export interface QualitySummaryResponse {
+  window_hours: number;
+  total_findings: number;
+  runs_with_findings: number;
+  severity_breakdown: QualitySeverityBreakdown[];
+  category_breakdown: QualityCategoryBreakdown[];
+  code_breakdown: QualityCodeBreakdown[];
+  recent_findings: QualityRecentFinding[];
+}
+
 /**
  * API Client Configuration
  */
@@ -513,6 +681,80 @@ export class DataChatAPI {
 
     if (!response.ok) {
       throw new Error(`Health check failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async listRuns(limit: number = 50): Promise<RunListResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/runs?limit=${limit}`);
+
+    if (!response.ok) {
+      throw new Error(`Run list failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getRun(runId: string): Promise<RunDetailResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/runs/${runId}`);
+
+    if (!response.ok) {
+      throw new Error(`Run detail failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getRunComparison(
+    primaryRunId: string,
+    comparisonRunId: string
+  ): Promise<RunComparisonResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/runs/compare?primary_run_id=${encodeURIComponent(primaryRunId)}&comparison_run_id=${encodeURIComponent(comparisonRunId)}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Run comparison failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getMonitoringSummary(windowHours: number = 24): Promise<MonitoringSummaryResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/monitoring/summary?window_hours=${windowHours}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Monitoring summary failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getMonitoringTrends(
+    windowHours: number = 24,
+    bucketHours: number = 1
+  ): Promise<MonitoringTrendResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/monitoring/trends?window_hours=${windowHours}&bucket_hours=${bucketHours}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Monitoring trends failed: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getQualitySummary(windowHours: number = 24): Promise<QualitySummaryResponse> {
+    const response = await fetch(
+      `${this.baseUrl}/api/v1/quality/summary?window_hours=${windowHours}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Quality summary failed: ${response.statusText}`);
     }
 
     return response.json();

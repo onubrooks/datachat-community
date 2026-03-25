@@ -205,3 +205,50 @@ class TestSystemEndpoints:
         assert response.json()["is_initialized"] is False
         mock_connector.close.assert_awaited_once()
         mock_vector_store.clear.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_system_reset_truncates_quality_findings_when_system_db_is_configured(
+        self, client, not_initialized_status, tmp_path
+    ):
+        mock_runtime_connector = AsyncMock()
+        mock_vector_store = AsyncMock()
+        mock_db_connector = AsyncMock()
+        fake_settings = SimpleNamespace(
+            system_database=SimpleNamespace(url="postgresql://postgres:@localhost:5432/datachat"),
+            chroma=SimpleNamespace(persist_dir=str(tmp_path / "chroma")),
+        )
+
+        with patch(
+            "backend.api.main.app_state",
+            {
+                "pipeline": object(),
+                "vector_store": mock_vector_store,
+                "knowledge_graph": None,
+                "connector": mock_runtime_connector,
+                "database_manager": None,
+                "profiling_store": None,
+                "feedback_store": None,
+                "conversation_store": None,
+                "sync_orchestrator": None,
+                "datapoint_watcher": None,
+            },
+        ):
+            with (
+                patch("backend.api.routes.system.get_settings", return_value=fake_settings),
+                patch("backend.api.routes.system.PostgresConnector", return_value=mock_db_connector),
+                patch("backend.api.routes.system.clear_config"),
+                patch("backend.api.routes.system.apply_config_defaults"),
+                patch(
+                    "backend.api.routes.system.SystemInitializer.status",
+                    new=AsyncMock(return_value=not_initialized_status),
+                ),
+            ):
+                response = client.post("/api/v1/system/reset")
+
+        assert response.status_code == 200
+        mock_db_connector.connect.assert_awaited_once()
+        mock_db_connector.close.assert_awaited_once()
+        executed_sql = mock_db_connector.execute.await_args.args[0]
+        assert "ai_quality_findings" in executed_sql
+        assert "ai_runs" in executed_sql
+        mock_vector_store.clear.assert_awaited_once()

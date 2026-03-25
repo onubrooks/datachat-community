@@ -86,9 +86,6 @@ export function SystemSetup({
                   Start Onboarding Wizard
                 </Link>
               </Button>
-              <Button asChild variant="secondary" size="sm">
-                <Link href="/databases?tab=quickstart">Open Database Manager</Link>
-              </Button>
             </div>
           </div>
           <div className="mt-3 space-y-2">

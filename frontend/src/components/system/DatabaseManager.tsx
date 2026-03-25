@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -1675,9 +1674,6 @@ export function DatabaseManager() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button asChild variant="secondary">
-            <Link href="/">Back to Chat</Link>
-          </Button>
           <Button variant="outline" onClick={handleSystemReset} disabled={jobs.resetting}>
             {jobs.resetting ? "Resetting..." : "Reset System"}
           </Button>
@@ -1738,9 +1734,6 @@ export function DatabaseManager() {
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={handleOpenOnboardingWizard}>
               Start Guided Wizard
-            </Button>
-            <Button asChild variant="secondary" size="sm">
-              <Link href="/">Open Chat</Link>
             </Button>
           </div>
         </div>
@@ -2807,10 +2800,6 @@ export function DatabaseManager() {
                     disabled={wizardStage.busy}
                   >
                     {wizardStage.actionLabel}
-                  </Button>
-                ) : hasSynced ? (
-                  <Button asChild size="sm">
-                    <Link href="/">Open Chat</Link>
                   </Button>
                 ) : null}
               </div>

@@ -7,7 +7,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -278,9 +277,6 @@ export default function SettingsPage() {
               Configure UI behavior and runtime setup without editing .env.
             </p>
           </div>
-          <Button asChild variant="secondary" size="sm">
-            <Link href="/">Back to Chat</Link>
-          </Button>
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">

@@ -442,6 +442,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     pipeline = DataChatPipeline(
                         retriever=retriever,
                         connector=connector,
+                        run_store=app_state.get("run_store"),
                         max_retries=3,
                     )
                     app_state["connector"] = connector
@@ -587,6 +588,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
         # Send final complete event
         payload = {
             "event": "complete",
+            "run_id": result.get("run_id"),
             "answer": answer,
             "clarifying_questions": result.get("clarifying_questions", []),
             "sub_answers": result.get("sub_answers", []),
