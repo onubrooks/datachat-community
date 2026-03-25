@@ -852,6 +852,14 @@ class DataChatPipeline:
             from backend.models import ExtractedEntity
 
             entities = [ExtractedEntity(**e) for e in state.get("entities", [])]
+            allowed_connection_ids = await self._resolve_equivalent_connection_ids(
+                target_connection_id=state.get("target_connection_id"),
+                database_url=state.get("database_url"),
+            )
+            retrieval_metadata_filter = self._build_retrieval_metadata_filter(
+                target_connection_id=state.get("target_connection_id"),
+                target_connection_ids=allowed_connection_ids,
+            )
 
             input_data = ContextAgentInput(
                 query=state["query"],
@@ -859,15 +867,14 @@ class DataChatPipeline:
                 entities=entities,
                 retrieval_mode="hybrid",
                 max_datapoints=10,
+                context={
+                    "retrieval_metadata_filter": retrieval_metadata_filter,
+                },
             )
 
             output = await self.context.execute(input_data)
 
             # Update state
-            allowed_connection_ids = await self._resolve_equivalent_connection_ids(
-                target_connection_id=state.get("target_connection_id"),
-                database_url=state.get("database_url"),
-            )
             raw_datapoints = [
                 {
                     "datapoint_id": dp.datapoint_id,
@@ -948,6 +955,25 @@ class DataChatPipeline:
         )
 
         return state
+
+    def _build_retrieval_metadata_filter(
+        self,
+        target_connection_id: str | None,
+        target_connection_ids: set[str] | None = None,
+    ) -> dict[str, Any] | None:
+        if not target_connection_id:
+            return None
+        allowed_connection_ids = {str(target_connection_id)}
+        if target_connection_ids:
+            allowed_connection_ids.update(
+                str(connection_id) for connection_id in target_connection_ids if connection_id
+            )
+        clauses = [{"connection_id": connection_id} for connection_id in sorted(allowed_connection_ids)]
+        if not clauses:
+            return None
+        if len(clauses) == 1:
+            return clauses[0]
+        return {"$or": clauses}
 
     def _filter_datapoints_by_target_connection(
         self,

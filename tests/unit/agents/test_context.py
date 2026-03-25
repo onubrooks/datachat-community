@@ -146,7 +146,83 @@ class TestExecution:
             query="sales data",
             mode=RetrievalMode.HYBRID,
             top_k=15,
+            metadata_filter=None,
         )
+
+    @pytest.mark.asyncio
+    async def test_passes_context_metadata_filter_to_retriever(
+        self, context_agent, mock_retriever, sample_retrieval_result
+    ):
+        mock_retriever.retrieve.return_value = sample_retrieval_result
+
+        input = ContextAgentInput(
+            query="sales data",
+            retrieval_mode="hybrid",
+            max_datapoints=3,
+            context={"retrieval_metadata_filter": {"connection_id": "conn_123"}},
+        )
+
+        await context_agent(input)
+
+        mock_retriever.retrieve.assert_called_once_with(
+            query="sales data",
+            mode=RetrievalMode.HYBRID,
+            top_k=3,
+            metadata_filter={"connection_id": "conn_123"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_uses_unfiltered_fallback_when_filtered_results_are_insufficient(
+        self, context_agent, mock_retriever
+    ):
+        filtered = RetrievalResult(
+            items=[
+                RetrievedItem(
+                    datapoint_id="table_sales_001",
+                    score=0.95,
+                    source="vector",
+                    metadata={"type": "Schema", "name": "Sales Table"},
+                )
+            ],
+            total_count=1,
+            mode=RetrievalMode.HYBRID,
+            query="sales data",
+            trace={"mode": "hybrid"},
+        )
+        unfiltered = RetrievalResult(
+            items=[
+                RetrievedItem(
+                    datapoint_id="table_sales_001",
+                    score=0.95,
+                    source="vector",
+                    metadata={"type": "Schema", "name": "Sales Table"},
+                ),
+                RetrievedItem(
+                    datapoint_id="metric_revenue_001",
+                    score=0.88,
+                    source="vector",
+                    metadata={"type": "Business", "name": "Revenue"},
+                ),
+            ],
+            total_count=2,
+            mode=RetrievalMode.HYBRID,
+            query="sales data",
+            trace={"mode": "hybrid"},
+        )
+        mock_retriever.retrieve.side_effect = [filtered, unfiltered]
+
+        input = ContextAgentInput(
+            query="sales data",
+            retrieval_mode="hybrid",
+            max_datapoints=2,
+            context={"retrieval_metadata_filter": {"connection_id": "conn_123"}},
+        )
+
+        output = await context_agent(input)
+
+        assert len(output.investigation_memory.datapoints) == 2
+        assert output.data["retrieval_trace"]["fallback_used"] is True
+        assert mock_retriever.retrieve.await_count == 2
 
     @pytest.mark.asyncio
     async def test_handles_different_retrieval_modes(

@@ -16,7 +16,7 @@ import logging
 from typing import Any
 
 from backend.agents.base import BaseAgent
-from backend.knowledge.retriever import RetrievalMode, Retriever
+from backend.knowledge.retriever import RetrievalMode, RetrievalResult, RetrievedItem, Retriever
 from backend.models.agent import (
     AgentMetadata,
     ContextAgentInput,
@@ -86,13 +86,32 @@ class ContextAgent(BaseAgent):
         try:
             # Convert retrieval mode string to enum
             mode = RetrievalMode(input.retrieval_mode)
+            metadata_filter = None
+            if isinstance(input.context, dict):
+                candidate_filter = input.context.get("retrieval_metadata_filter")
+                if isinstance(candidate_filter, dict) and candidate_filter:
+                    metadata_filter = candidate_filter
 
             # Perform retrieval
             result = await self.retriever.retrieve(
                 query=input.query,
                 mode=mode,
                 top_k=input.max_datapoints,
+                metadata_filter=metadata_filter,
             )
+            if metadata_filter and len(result.items) < input.max_datapoints:
+                unfiltered_result = await self.retriever.retrieve(
+                    query=input.query,
+                    mode=mode,
+                    top_k=input.max_datapoints,
+                    metadata_filter=None,
+                )
+                result = self._merge_retrieval_results(
+                    primary=result,
+                    fallback=unfiltered_result,
+                    top_k=input.max_datapoints,
+                    metadata_filter=metadata_filter,
+                )
 
             # Convert retrieval results to RetrievedDataPoints
             datapoints = []
@@ -275,3 +294,38 @@ class ContextAgent(BaseAgent):
             return 0.35 if has_business else 0.2
 
         return 0.5 if (has_schema or has_business) else 0.2
+
+    @staticmethod
+    def _merge_retrieval_results(
+        *,
+        primary: RetrievalResult,
+        fallback: RetrievalResult,
+        top_k: int,
+        metadata_filter: dict[str, Any],
+    ) -> RetrievalResult:
+        seen_ids: set[str] = set()
+        merged_items: list[RetrievedItem] = []
+
+        for item in [*primary.items, *fallback.items]:
+            if item.datapoint_id in seen_ids:
+                continue
+            seen_ids.add(item.datapoint_id)
+            merged_items.append(item)
+            if len(merged_items) >= top_k:
+                break
+
+        merged_trace = {
+            **(primary.trace or {}),
+            "metadata_filter_applied": metadata_filter,
+            "filtered_candidate_count": len(primary.items),
+            "unfiltered_fallback_candidate_count": len(fallback.items),
+            "fallback_used": True,
+        }
+
+        return RetrievalResult(
+            items=merged_items,
+            total_count=len(merged_items),
+            mode=primary.mode,
+            query=primary.query,
+            trace=merged_trace,
+        )

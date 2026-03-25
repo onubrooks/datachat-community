@@ -111,6 +111,7 @@ class Retriever:
             "example": 1,
         }
         self._precedence_pool_multiplier = 3
+        self._graph_query_seed_threshold = 0.55
 
         logger.info(f"Retriever initialized with RRF k={rrf_k}")
 
@@ -324,8 +325,13 @@ class Retriever:
         # Get graph results by trying vector results as seed nodes
         graph_items = {}
         graph_trace_candidates: list[dict[str, Any]] = []
+        graph_query_candidates: list[dict[str, Any]] = []
         seed_node_used: str | None = None
         graph_fallback_reason: str | None = None
+        strongest_vector_score = max(
+            (item["score"] for item in vector_items.values()),
+            default=0.0,
+        )
         if vector_results:
             # Try each vector result as a seed until we get graph results
             # This handles cases where top results aren't in the graph
@@ -390,6 +396,81 @@ class Retriever:
                         f"All {len(vector_results)} seed candidates failed graph traversal, "
                         "using vector-only results"
                     )
+
+        if not graph_items or strongest_vector_score < self._graph_query_seed_threshold:
+            query_seed_results = self.knowledge_graph.search_nodes(
+                query, top_k=max(3, min(graph_top_k, 8))
+            )
+            for seed_rank, node in enumerate(query_seed_results, start=1):
+                metadata = node.get("metadata", {})
+                if metadata_filter and not self._metadata_matches_filter(metadata, metadata_filter):
+                    continue
+
+                seed_node = node["node_id"]
+                graph_query_candidates.append(
+                    {
+                        "datapoint_id": seed_node,
+                        "rank": seed_rank,
+                        "score": node["score"],
+                        "source": "graph_query",
+                        "name": node.get("name", seed_node),
+                        "source_tier": metadata.get("source_tier"),
+                        "matched_tokens": node.get("matched_tokens", []),
+                    }
+                )
+                existing = graph_items.get(seed_node)
+                if existing is None or seed_rank < existing["rank"]:
+                    graph_items[seed_node] = {
+                        "rank": seed_rank,
+                        "score": float(node["score"]),
+                        "metadata": metadata,
+                        "content": None,
+                    }
+
+                try:
+                    related_nodes = self.knowledge_graph.get_related(
+                        seed_node, max_depth=graph_max_depth
+                    )
+                except Exception:
+                    continue
+
+                for offset, related in enumerate(related_nodes[:graph_top_k], start=1):
+                    related_metadata = related["metadata"]
+                    if metadata_filter and not self._metadata_matches_filter(
+                        related_metadata, metadata_filter
+                    ):
+                        continue
+                    rank = seed_rank + offset
+                    datapoint_id = related["node_id"]
+                    score = 1.0 / related["distance"] if related["distance"] > 0 else 1.0
+                    current = graph_items.get(datapoint_id)
+                    if current is None or rank < current["rank"]:
+                        graph_items[datapoint_id] = {
+                            "rank": rank,
+                            "score": score,
+                            "metadata": related_metadata,
+                            "content": None,
+                        }
+                    if not any(
+                        candidate["datapoint_id"] == datapoint_id for candidate in graph_trace_candidates
+                    ):
+                        graph_trace_candidates.append(
+                            {
+                                "datapoint_id": datapoint_id,
+                                "rank": rank,
+                                "distance": related["distance"],
+                                "score": score,
+                                "name": related_metadata.get("name", datapoint_id),
+                                "source_tier": related_metadata.get("source_tier"),
+                            }
+                        )
+
+            if graph_query_candidates:
+                graph_fallback_reason = (
+                    "weak_vector_query_graph_search"
+                    if vector_results and strongest_vector_score < self._graph_query_seed_threshold
+                    else "query_graph_search"
+                )
 
         # Apply RRF (Reciprocal Rank Fusion)
         rrf_scores = self._apply_rrf(vector_items, graph_items)
@@ -456,6 +537,7 @@ class Retriever:
         return items, {
             "vector_candidates": vector_trace_candidates,
             "graph_candidates": graph_trace_candidates,
+            "graph_query_candidates": graph_query_candidates,
             "rrf_candidates": rrf_trace_candidates,
             "graph_seed_node": seed_node_used,
             "graph_fallback_reason": graph_fallback_reason,
@@ -645,6 +727,30 @@ class Retriever:
     def _source_priority(self, metadata: dict[str, Any] | None) -> int:
         tier = self._source_tier(metadata)
         return self._source_tier_priority.get(tier, self._source_tier_priority["unknown"])
+
+    def _metadata_matches_filter(
+        self, metadata: dict[str, Any] | None, filter_metadata: dict[str, Any] | None
+    ) -> bool:
+        if not filter_metadata:
+            return True
+        if not isinstance(metadata, dict):
+            return False
+        if "$or" in filter_metadata:
+            clauses = filter_metadata.get("$or")
+            if not isinstance(clauses, list):
+                return False
+            return any(
+                self._metadata_matches_filter(metadata, clause)
+                for clause in clauses
+                if isinstance(clause, dict)
+            )
+        for key, expected in filter_metadata.items():
+            if key.startswith("$"):
+                continue
+            actual = metadata.get(key)
+            if actual != expected:
+                return False
+        return True
 
     def _source_tier(self, metadata: dict[str, Any] | None) -> str:
         if not isinstance(metadata, dict):
