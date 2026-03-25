@@ -353,6 +353,7 @@ class RunStore:
         findings = await self._pool.fetch(
             """
             SELECT
+                run_id,
                 finding_id,
                 finding_type,
                 severity,
