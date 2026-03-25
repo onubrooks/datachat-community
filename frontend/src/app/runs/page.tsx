@@ -508,7 +508,7 @@ export default function RunsPage() {
                         {generatedSql ? (
                           <Card className="p-4">
                             <SectionTitle title="Generated SQL" subtitle="Captured directly from the SQL stage payload." />
-                            <pre className="mt-3 overflow-x-auto rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
+                            <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
                               {generatedSql}
                             </pre>
                           </Card>
@@ -652,13 +652,13 @@ export default function RunsPage() {
                       <div className="grid gap-4 md:grid-cols-2">
                         <Card className="p-4">
                           <SectionTitle title="Generated SQL" subtitle="Primary run SQL payload." />
-                          <pre className="mt-3 overflow-x-auto rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
+                          <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
                             {primarySql || "No generated SQL captured for this run."}
                           </pre>
                         </Card>
                         <Card className="p-4">
                           <SectionTitle title="Generated SQL" subtitle="Comparison run SQL payload." />
-                          <pre className="mt-3 overflow-x-auto rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
+                          <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-[11px] leading-5 text-foreground">
                             {comparisonSql || "No generated SQL captured for this run."}
                           </pre>
                         </Card>
