@@ -78,10 +78,10 @@ class EndRouteHandler(RouteHandler):
                 "list tables, show first 5 rows of a table, or total sales last month."
             ),
             "setup_help": (
-                "To connect a database, open Settings -> Database Manager in the web app "
-                "or run `datachat setup` / `datachat connect` in the CLI. "
-                "Then ask questions like: list tables, show first 5 rows of a table, "
-                "or total sales last month."
+                "To connect a database, start the onboarding wizard "
+                "(UI: Databases -> Start Onboarding Wizard, CLI: `datachat onboarding wizard`). "
+                "If needed, set provider keys in Settings first. "
+                "Then ask: list tables, show first 5 rows of a table, or total sales last month."
             ),
             "datapoint_help": (
                 "You can manage and inspect DataPoints without writing SQL. "
