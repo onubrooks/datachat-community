@@ -51,6 +51,7 @@ from backend.models import (
     ToolPlannerAgentInput,
     ValidatorAgentInput,
 )
+from backend.profiling.cache import load_profile_cache
 from backend.pipeline.action_loop import (
     ActionLoopController,
     ActionState,
@@ -77,6 +78,9 @@ from backend.utils.pattern_matcher import QueryPatternMatcher
 
 logger = logging.getLogger(__name__)
 ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada"
+PROFILE_STALE_WARNING_HOURS = 24
+LOW_RETRIEVAL_CONFIDENCE_THRESHOLD = 0.55
+LOW_SAMPLE_COVERAGE_THRESHOLD = 0.5
 
 
 # ============================================================================
@@ -2496,6 +2500,8 @@ class DataChatPipeline:
                 }
             )
 
+        findings.extend(DataChatPipeline._build_advisory_drift_findings(state))
+
         if state.get("error") or state.get("last_error_class"):
             findings.append(
                 {
@@ -2521,6 +2527,282 @@ class DataChatPipeline:
             seen.add(key)
             deduped.append(finding)
         return deduped
+
+    @staticmethod
+    def _build_advisory_drift_findings(state: PipelineState) -> list[dict[str, Any]]:
+        findings: list[dict[str, Any]] = []
+        query = str(state.get("query") or "")
+        retrieved = [
+            item for item in (state.get("retrieved_datapoints") or []) if isinstance(item, dict)
+        ]
+        retrieval_trace = state.get("retrieval_trace") if isinstance(state.get("retrieval_trace"), dict) else {}
+
+        findings.extend(DataChatPipeline._profile_cache_findings(state))
+
+        contract_gaps: list[dict[str, Any]] = []
+        low_sample_tables: list[dict[str, Any]] = []
+        conflict_map: dict[str, list[dict[str, Any]]] = {}
+
+        for datapoint in retrieved:
+            metadata = datapoint.get("metadata") if isinstance(datapoint.get("metadata"), dict) else {}
+            datapoint_id = str(datapoint.get("datapoint_id") or "")
+            datapoint_name = str(datapoint.get("name") or datapoint_id)
+
+            missing_fields = [
+                field
+                for field in ("grain", "exclusions", "confidence_notes")
+                if not str(metadata.get(field) or "").strip()
+            ]
+            if missing_fields:
+                contract_gaps.append(
+                    {
+                        "datapoint_id": datapoint_id,
+                        "name": datapoint_name,
+                        "missing_fields": missing_fields,
+                    }
+                )
+
+            sample_warning = DataChatPipeline._evaluate_low_sample_coverage(datapoint)
+            if sample_warning:
+                low_sample_tables.append(sample_warning)
+
+            conflict_key = DataChatPipeline._semantic_conflict_key(datapoint)
+            if conflict_key:
+                conflict_map.setdefault(conflict_key, []).append(datapoint)
+
+        if contract_gaps:
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "contract",
+                    "code": "datapoint_contract_gap",
+                    "message": "One or more retrieved datapoints are missing recommended contract metadata.",
+                    "details": {"query": query, "datapoints": contract_gaps[:10]},
+                }
+            )
+
+        if low_sample_tables:
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "profile",
+                    "code": "low_sample_coverage",
+                    "message": "Retrieved schema context has weak sample coverage for one or more tables.",
+                    "details": {"query": query, "tables": low_sample_tables[:10]},
+                }
+            )
+
+        schema_filtered = retrieval_trace.get("live_schema_filter", {}).get("filtered_out", [])
+        if isinstance(schema_filtered, list) and schema_filtered:
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "schema",
+                    "code": "schema_hash_mismatch",
+                    "message": "Retrieved datapoints referenced tables that are missing from the live schema.",
+                    "details": {"query": query, "filtered_out": schema_filtered[:10]},
+                }
+            )
+
+        score_items = [
+            float(item.get("score"))
+            for item in retrieved[:3]
+            if isinstance(item.get("score"), (int, float))
+        ]
+        if score_items and max(score_items) < LOW_RETRIEVAL_CONFIDENCE_THRESHOLD:
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "retrieval",
+                    "code": "retrieval_low_confidence",
+                    "message": "Retrieved datapoints were weakly matched to the query.",
+                    "details": {
+                        "query": query,
+                        "top_scores": score_items,
+                        "threshold": LOW_RETRIEVAL_CONFIDENCE_THRESHOLD,
+                    },
+                }
+            )
+
+        conflicts = []
+        for conflict_key, members in conflict_map.items():
+            if len(members) <= 1:
+                continue
+            distinct_ids = {
+                str(item.get("datapoint_id") or "")
+                for item in members
+                if str(item.get("datapoint_id") or "").strip()
+            }
+            if len(distinct_ids) <= 1:
+                continue
+            conflicts.append(
+                {
+                    "key": conflict_key,
+                    "datapoints": [
+                        {
+                            "datapoint_id": str(item.get("datapoint_id") or ""),
+                            "name": str(item.get("name") or ""),
+                            "source_tier": str(
+                                ((item.get("metadata") or {}) if isinstance(item.get("metadata"), dict) else {}).get("source_tier")
+                                or "unknown"
+                            ),
+                        }
+                        for item in members[:5]
+                    ],
+                }
+            )
+        if conflicts:
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "warning",
+                    "category": "retrieval",
+                    "code": "retrieval_conflict",
+                    "message": "The retrieval set contains overlapping semantic definitions.",
+                    "details": {"query": query, "conflicts": conflicts[:10]},
+                }
+            )
+
+        return findings
+
+    @staticmethod
+    def _profile_cache_findings(state: PipelineState) -> list[dict[str, Any]]:
+        database_type = state.get("database_type")
+        database_url = state.get("database_url")
+        if not database_url:
+            return []
+
+        snapshot = load_profile_cache(database_type=database_type, database_url=database_url)
+        if not isinstance(snapshot, dict):
+            return []
+
+        findings: list[dict[str, Any]] = []
+        created_at_raw = snapshot.get("created_at")
+        created_at = DataChatPipeline._parse_datetime(created_at_raw)
+        if created_at is not None:
+            age_hours = (datetime.now(UTC) - created_at).total_seconds() / 3600
+            if age_hours >= PROFILE_STALE_WARNING_HOURS:
+                findings.append(
+                    {
+                        "finding_type": "advisory",
+                        "severity": "warning",
+                        "category": "profile",
+                        "code": "stale_profile",
+                        "message": "The cached database profile may be stale relative to the live schema.",
+                        "details": {
+                            "query": str(state.get("query") or ""),
+                            "profile_created_at": created_at.isoformat(),
+                            "profile_age_hours": round(age_hours, 2),
+                            "threshold_hours": PROFILE_STALE_WARNING_HOURS,
+                        },
+                    }
+                )
+
+        if snapshot.get("tables_failed") or snapshot.get("partial_failures"):
+            findings.append(
+                {
+                    "finding_type": "advisory",
+                    "severity": "info",
+                    "category": "profile",
+                    "code": "drift_warning",
+                    "message": "The cached profile contains failures or partial profiling warnings.",
+                    "details": {
+                        "tables_failed": int(snapshot.get("tables_failed") or 0),
+                        "partial_failures": list(snapshot.get("partial_failures") or [])[:10],
+                    },
+                }
+            )
+
+        return findings
+
+    @staticmethod
+    def _evaluate_low_sample_coverage(datapoint: dict[str, Any]) -> dict[str, Any] | None:
+        metadata = datapoint.get("metadata") if isinstance(datapoint.get("metadata"), dict) else {}
+        columns = metadata.get("profiled_columns")
+        if not isinstance(columns, list) or not columns:
+            return None
+
+        eligible_columns = []
+        missing_samples = 0
+        for column in columns:
+            if not isinstance(column, dict):
+                continue
+            eligible_columns.append(column)
+            sample_values = column.get("sample_values")
+            if not isinstance(sample_values, list) or not any(str(v).strip() for v in sample_values):
+                missing_samples += 1
+
+        if not eligible_columns:
+            return None
+
+        missing_ratio = missing_samples / len(eligible_columns)
+        if missing_ratio < LOW_SAMPLE_COVERAGE_THRESHOLD:
+            return None
+
+        return {
+            "datapoint_id": str(datapoint.get("datapoint_id") or ""),
+            "table_key": str(
+                metadata.get("table_key")
+                or metadata.get("table_name")
+                or datapoint.get("table_name")
+                or datapoint.get("name")
+                or ""
+            ),
+            "columns_without_samples": missing_samples,
+            "column_count": len(eligible_columns),
+            "missing_ratio": round(missing_ratio, 2),
+        }
+
+    @staticmethod
+    def _semantic_conflict_key(datapoint: dict[str, Any]) -> str | None:
+        metadata = datapoint.get("metadata") if isinstance(datapoint.get("metadata"), dict) else {}
+        datapoint_type = str(datapoint.get("datapoint_type") or "").strip().lower()
+        name = str(datapoint.get("name") or "").strip().lower()
+        table_key = str(
+            metadata.get("table_key")
+            or metadata.get("table_name")
+            or metadata.get("table")
+            or datapoint.get("table_name")
+            or ""
+        ).strip().lower()
+
+        if datapoint_type == "schema":
+            return f"table::{table_key}" if table_key else None
+
+        related_tables = metadata.get("related_tables")
+        normalized_related: list[str] = []
+        if isinstance(related_tables, str):
+            normalized_related = sorted(
+                item.strip().lower() for item in related_tables.split(",") if item.strip()
+            )
+        elif isinstance(related_tables, list):
+            normalized_related = sorted(str(item).strip().lower() for item in related_tables if str(item).strip())
+
+        if table_key and table_key not in normalized_related:
+            normalized_related.append(table_key)
+            normalized_related.sort()
+
+        if not name:
+            return None
+        if normalized_related:
+            return f"{datapoint_type}::{name}::{'|'.join(normalized_related)}"
+        return f"{datapoint_type}::{name}"
+
+    @staticmethod
+    def _parse_datetime(value: object) -> datetime | None:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
     def _build_run_output(self, state: PipelineState) -> dict[str, Any]:
         query_result = state.get("query_result") if isinstance(state.get("query_result"), dict) else None
