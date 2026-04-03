@@ -51,7 +51,6 @@ from backend.models import (
     ToolPlannerAgentInput,
     ValidatorAgentInput,
 )
-from backend.profiling.cache import load_profile_cache
 from backend.pipeline.action_loop import (
     ActionLoopController,
     ActionState,
@@ -70,6 +69,7 @@ from backend.pipeline.route_handlers import (
     ToolRouteHandler,
 )
 from backend.pipeline.session_context import SessionContext
+from backend.profiling.cache import load_profile_cache
 from backend.tools import ToolExecutor, initialize_tools
 from backend.tools.base import ToolContext
 from backend.tools.policy import ToolPolicyError
@@ -80,6 +80,7 @@ logger = logging.getLogger(__name__)
 ENV_DATABASE_CONNECTION_ID = "00000000-0000-0000-0000-00000000dada"
 PROFILE_STALE_WARNING_HOURS = 24
 LOW_RETRIEVAL_CONFIDENCE_THRESHOLD = 0.55
+LOW_RETRIEVAL_CONFIDENCE_THRESHOLD_HYBRID = 0.015
 LOW_SAMPLE_COVERAGE_THRESHOLD = 0.5
 
 
@@ -973,6 +974,16 @@ class DataChatPipeline:
                 str(connection_id) for connection_id in target_connection_ids if connection_id
             )
         clauses = [{"connection_id": connection_id} for connection_id in sorted(allowed_connection_ids)]
+        clauses.extend(
+            [
+                {"scope": "global"},
+                {"scope": "shared"},
+                {"shared": True},
+                {"shared": "true"},
+                {"shared": "True"},
+                {"shared": "1"},
+            ]
+        )
         if not clauses:
             return None
         if len(clauses) == 1:
@@ -2612,7 +2623,13 @@ class DataChatPipeline:
             for item in retrieved[:3]
             if isinstance(item.get("score"), (int, float))
         ]
-        if score_items and max(score_items) < LOW_RETRIEVAL_CONFIDENCE_THRESHOLD:
+        retrieval_mode = str(retrieval_trace.get("mode") or "").strip().lower()
+        low_confidence_threshold = (
+            LOW_RETRIEVAL_CONFIDENCE_THRESHOLD_HYBRID
+            if retrieval_mode == "hybrid"
+            else LOW_RETRIEVAL_CONFIDENCE_THRESHOLD
+        )
+        if score_items and max(score_items) < low_confidence_threshold:
             findings.append(
                 {
                     "finding_type": "advisory",
@@ -2623,7 +2640,8 @@ class DataChatPipeline:
                     "details": {
                         "query": query,
                         "top_scores": score_items,
-                        "threshold": LOW_RETRIEVAL_CONFIDENCE_THRESHOLD,
+                        "threshold": low_confidence_threshold,
+                        "retrieval_mode": retrieval_mode or "unknown",
                     },
                 }
             )

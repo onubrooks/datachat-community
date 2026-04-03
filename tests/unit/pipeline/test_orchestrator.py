@@ -707,6 +707,20 @@ class TestPipelineExecution:
         assert [item["datapoint_id"] for item in filtered] == ["dp_env", "dp_other"]
         assert trace["kept_count"] == 2
 
+    def test_build_retrieval_metadata_filter_includes_global_scope(self, pipeline):
+        metadata_filter = pipeline._build_retrieval_metadata_filter(  # noqa: SLF001
+            target_connection_id="conn-fintech",
+            target_connection_ids={"conn-fintech", "conn-shared"},
+        )
+
+        assert metadata_filter is not None
+        clauses = metadata_filter["$or"]
+        assert {"connection_id": "conn-fintech"} in clauses
+        assert {"connection_id": "conn-shared"} in clauses
+        assert {"scope": "global"} in clauses
+        assert {"scope": "shared"} in clauses
+        assert {"shared": True} in clauses
+
     @pytest.mark.asyncio
     async def test_resolve_equivalent_connection_ids_includes_registry_and_env_matches(
         self, pipeline
@@ -2524,3 +2538,37 @@ def test_build_quality_findings_emits_retrieval_conflict():
     conflict_finding = next(item for item in findings if item["code"] == "retrieval_conflict")
     assert conflict_finding["category"] == "retrieval"
     assert conflict_finding["details"]["conflicts"][0]["key"].startswith("business::revenue")
+
+
+def test_build_quality_findings_does_not_flag_normal_hybrid_rrf_scores():
+    state = {
+        "query": "Show revenue by region",
+        "retrieved_datapoints": [
+            {
+                "datapoint_id": "metric_revenue_001",
+                "datapoint_type": "Business",
+                "name": "Revenue",
+                "score": 0.02,
+                "source": "hybrid",
+                "metadata": {
+                    "related_tables": ["public.orders"],
+                    "grain": "daily_region",
+                    "exclusions": "none",
+                    "confidence_notes": "reviewed",
+                },
+            }
+        ],
+        "retrieval_trace": {"mode": "hybrid"},
+        "query_result": None,
+        "validation_warnings": [],
+        "validation_errors": [],
+        "clarification_needed": False,
+        "clarifying_questions": [],
+        "answer_confidence": 0.9,
+    }
+
+    with patch("backend.pipeline.orchestrator.load_profile_cache", return_value=None):
+        findings = DataChatPipeline._build_quality_findings(state)  # noqa: SLF001
+
+    codes = {item["code"] for item in findings}
+    assert "retrieval_low_confidence" not in codes
