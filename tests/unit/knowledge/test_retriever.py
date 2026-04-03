@@ -32,6 +32,7 @@ def mock_knowledge_graph():
     """Create mock KnowledgeGraph."""
     mock = Mock(spec=KnowledgeGraph)
     mock.get_node_metadata.return_value = None
+    mock.search_nodes.return_value = []
     return mock
 
 
@@ -652,6 +653,63 @@ class TestHybridMode:
         assert len(result.trace["vector_candidates"]) == len(sample_vector_results)
         assert len(result.trace["graph_candidates"]) == len(sample_graph_results)
         assert len(result.trace["rrf_candidates"]) >= 1
+
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_uses_query_graph_search_when_vector_is_empty(
+        self, retriever, mock_vector_store, mock_knowledge_graph
+    ):
+        mock_vector_store.search.return_value = []
+        mock_knowledge_graph.search_nodes.return_value = [
+            {
+                "node_id": "metric_deposits_001",
+                "score": 0.8,
+                "name": "Total Deposits",
+                "metadata": {"name": "Total Deposits", "type": "Business"},
+                "matched_tokens": ["deposits"],
+            }
+        ]
+        mock_knowledge_graph.get_related.return_value = []
+
+        result = await retriever.retrieve("show deposits by segment", mode=RetrievalMode.HYBRID, top_k=5)
+
+        assert result.items
+        assert result.items[0].datapoint_id == "metric_deposits_001"
+        assert result.trace["graph_fallback_reason"] == "query_graph_search"
+        assert result.trace["graph_query_candidates"][0]["datapoint_id"] == "metric_deposits_001"
+
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_filters_query_graph_results_with_metadata_filter(
+        self, retriever, mock_vector_store, mock_knowledge_graph
+    ):
+        mock_vector_store.search.return_value = []
+        mock_knowledge_graph.search_nodes.return_value = [
+            {
+                "node_id": "table_orders_wrong_connection",
+                "score": 0.9,
+                "name": "Orders",
+                "metadata": {"name": "Orders", "connection_id": "conn_b"},
+                "matched_tokens": ["orders"],
+            },
+            {
+                "node_id": "table_orders_target",
+                "score": 0.7,
+                "name": "Orders",
+                "metadata": {"name": "Orders", "connection_id": "conn_a"},
+                "matched_tokens": ["orders"],
+            },
+        ]
+        mock_knowledge_graph.get_related.return_value = []
+
+        result = await retriever.retrieve(
+            "orders",
+            mode=RetrievalMode.HYBRID,
+            top_k=5,
+            metadata_filter={"connection_id": "conn_a"},
+        )
+
+        ids = [item.datapoint_id for item in result.items]
+        assert "table_orders_target" in ids
+        assert "table_orders_wrong_connection" not in ids
 
 
 class TestRRFAlgorithm:

@@ -23,6 +23,7 @@ _DEFAULT_CONFIDENCE_NOTES = (
     "Auto-generated datapoint. Human validation is recommended before "
     "production-critical use."
 )
+_NUMERIC_TYPE_TOKENS = ("int", "numeric", "decimal", "float", "double", "real", "number")
 
 
 class DataPointGenerator:
@@ -171,7 +172,7 @@ class DataPointGenerator:
         if not data_type:
             return False
         lowered = data_type.lower()
-        return any(token in lowered for token in ("int", "numeric", "decimal", "float", "double"))
+        return any(token in lowered for token in _NUMERIC_TYPE_TOKENS)
 
     @staticmethod
     def _is_temporal_data_type(data_type: str | None) -> bool:
@@ -605,8 +606,8 @@ class DataPointGenerator:
             batch = eligible_tables[batch_start : batch_start + batch_size]
             payload = await self._generate_metrics_batch(batch, max_metrics_per_table)
             for _idx, table in enumerate(batch):
-                table_payload = payload.get(table.name) or payload.get(
-                    f"{table.schema_name}.{table.name}", {}
+                table_payload = payload.get(f"{table.schema_name}.{table.name}") or payload.get(
+                    table.name, {}
                 )
                 metrics = table_payload.get("metrics", [])
                 numeric_cols = [
@@ -709,7 +710,7 @@ class DataPointGenerator:
             "max_metrics_per_table": max_metrics_per_table,
         }
         user_prompt = (
-            "For each table, return JSON keyed by table name (without schema) with "
+            "For each table, return JSON keyed by fully qualified table name (schema.table) with "
             "a list of metric objects under 'metrics'. "
             "Each metric must include name, calculation, aggregation, "
             "synonyms, business_rules, unit, confidence.\n\n"
@@ -736,7 +737,7 @@ class DataPointGenerator:
 
     @staticmethod
     def _is_numeric_type(data_type: str) -> bool:
-        return any(token in data_type.lower() for token in ["int", "numeric", "decimal", "float"])
+        return any(token in data_type.lower() for token in _NUMERIC_TYPE_TOKENS)
 
     @staticmethod
     def _has_time_series(table: TableProfile) -> bool:

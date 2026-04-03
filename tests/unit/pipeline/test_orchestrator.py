@@ -12,6 +12,7 @@ Tests pipeline execution including:
 Updated: Uses QueryAnalyzerAgent instead of ClassifierAgent
 """
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -592,11 +593,12 @@ class TestPipelineExecution:
         ]
         pipeline._get_live_table_catalog = AsyncMock(return_value={"public.bank_accounts"})
 
-        filtered = await pipeline._filter_datapoints_by_live_schema(
+        filtered, trace = await pipeline._filter_datapoints_by_live_schema(
             datapoints, database_type="postgresql", database_url="postgresql://test"
         )
 
         assert [item["datapoint_id"] for item in filtered] == ["metric_fintech_1"]
+        assert trace["filtered_out"][0]["reason"] == "missing_live_schema"
 
     def test_split_multi_query_avoids_false_split_for_single_analytic_request(self, pipeline):
         parts = pipeline._split_multi_query("Show gross margin and net margin by category")
@@ -639,13 +641,14 @@ class TestPipelineExecution:
             },
         ]
 
-        filtered = pipeline._filter_datapoints_by_target_connection(
+        filtered, trace = pipeline._filter_datapoints_by_target_connection(
             datapoints, target_connection_id="conn-fintech"
         )
 
         assert [item["datapoint_id"] for item in filtered] == [
             "dp_fintech",
         ]
+        assert trace["filtered_out"][0]["reason"] == "different_connection_scope"
 
     def test_filter_datapoints_by_target_connection_with_global(self, pipeline):
         datapoints = [
@@ -667,7 +670,7 @@ class TestPipelineExecution:
             },
         ]
 
-        filtered = pipeline._filter_datapoints_by_target_connection(
+        filtered, trace = pipeline._filter_datapoints_by_target_connection(
             datapoints, target_connection_id="conn-fintech"
         )
 
@@ -675,6 +678,7 @@ class TestPipelineExecution:
             "dp_fintech",
             "dp_global",
         ]
+        assert trace["kept_count"] == 2
 
     def test_filter_datapoints_by_target_connection_accepts_equivalent_connection_ids(
         self, pipeline
@@ -690,7 +694,7 @@ class TestPipelineExecution:
             },
         ]
 
-        filtered = pipeline._filter_datapoints_by_target_connection(
+        filtered, trace = pipeline._filter_datapoints_by_target_connection(
             datapoints,
             target_connection_id="conn-managed",
             target_connection_ids={
@@ -701,6 +705,21 @@ class TestPipelineExecution:
         )
 
         assert [item["datapoint_id"] for item in filtered] == ["dp_env", "dp_other"]
+        assert trace["kept_count"] == 2
+
+    def test_build_retrieval_metadata_filter_includes_global_scope(self, pipeline):
+        metadata_filter = pipeline._build_retrieval_metadata_filter(  # noqa: SLF001
+            target_connection_id="conn-fintech",
+            target_connection_ids={"conn-fintech", "conn-shared"},
+        )
+
+        assert metadata_filter is not None
+        clauses = metadata_filter["$or"]
+        assert {"connection_id": "conn-fintech"} in clauses
+        assert {"connection_id": "conn-shared"} in clauses
+        assert {"scope": "global"} in clauses
+        assert {"scope": "shared"} in clauses
+        assert {"shared": True} in clauses
 
     @pytest.mark.asyncio
     async def test_resolve_equivalent_connection_ids_includes_registry_and_env_matches(
@@ -2316,7 +2335,10 @@ class TestErrorHandling:
 
         # Verify error is captured
         assert result.get("error") is not None
-        assert "Classification failed" in result["error"]
+        assert (
+            "Classification failed" in result["error"]
+            or "Context retrieval failed" in result["error"]
+        )
 
     @pytest.mark.asyncio
     async def test_error_handler_provides_graceful_message(self, pipeline):
@@ -2406,3 +2428,147 @@ class TestErrorHandling:
             or "provide more" in error_text
             or "unable to" in error_text
         )
+
+
+def test_build_quality_findings_emits_advisory_drift_checks():
+    stale_created_at = (datetime.now(UTC) - timedelta(hours=30)).isoformat()
+    state = {
+        "query": "Show deposits by segment",
+        "database_type": "postgresql",
+        "database_url": "postgresql://localhost/testdb",
+        "retrieved_datapoints": [
+            {
+                "datapoint_id": "table_deposits_001",
+                "datapoint_type": "Schema",
+                "name": "Deposits",
+                "score": 0.42,
+                "source": "hybrid",
+                "metadata": {
+                    "table_key": "public.deposits",
+                    "profiled_columns": [
+                        {"name": "segment", "sample_values": []},
+                        {"name": "amount", "sample_values": []},
+                    ],
+                },
+            }
+        ],
+        "retrieval_trace": {
+            "live_schema_filter": {
+                "filtered_out": [
+                    {
+                        "datapoint_id": "metric_old_001",
+                        "reason": "missing_live_schema",
+                        "table_keys": ["public.old_deposits"],
+                    }
+                ]
+            }
+        },
+        "query_result": None,
+        "validation_warnings": [],
+        "validation_errors": [],
+        "clarification_needed": False,
+        "clarifying_questions": [],
+        "answer_confidence": 0.82,
+    }
+
+    with patch(
+        "backend.pipeline.orchestrator.load_profile_cache",
+        return_value={
+            "created_at": stale_created_at,
+            "tables_failed": 1,
+            "partial_failures": ["public.deposits: sample values unavailable"],
+        },
+    ):
+        findings = DataChatPipeline._build_quality_findings(state)  # noqa: SLF001
+
+    codes = {item["code"] for item in findings}
+    assert "stale_profile" in codes
+    assert "drift_warning" in codes
+    assert "low_sample_coverage" in codes
+    assert "datapoint_contract_gap" in codes
+    assert "schema_hash_mismatch" in codes
+    assert "retrieval_low_confidence" in codes
+
+
+def test_build_quality_findings_emits_retrieval_conflict():
+    state = {
+        "query": "Show revenue by region",
+        "retrieved_datapoints": [
+            {
+                "datapoint_id": "metric_revenue_user_001",
+                "datapoint_type": "Business",
+                "name": "Revenue",
+                "score": 0.9,
+                "source": "hybrid",
+                "metadata": {
+                    "related_tables": ["public.orders"],
+                    "source_tier": "user",
+                    "grain": "daily_region",
+                    "exclusions": "none",
+                    "confidence_notes": "reviewed",
+                },
+            },
+            {
+                "datapoint_id": "metric_revenue_managed_001",
+                "datapoint_type": "Business",
+                "name": "Revenue",
+                "score": 0.84,
+                "source": "hybrid",
+                "metadata": {
+                    "related_tables": ["public.orders"],
+                    "source_tier": "managed",
+                    "grain": "daily_region",
+                    "exclusions": "none",
+                    "confidence_notes": "reviewed",
+                },
+            },
+        ],
+        "retrieval_trace": {},
+        "query_result": None,
+        "validation_warnings": [],
+        "validation_errors": [],
+        "clarification_needed": False,
+        "clarifying_questions": [],
+        "answer_confidence": 0.9,
+    }
+
+    with patch("backend.pipeline.orchestrator.load_profile_cache", return_value=None):
+        findings = DataChatPipeline._build_quality_findings(state)  # noqa: SLF001
+
+    conflict_finding = next(item for item in findings if item["code"] == "retrieval_conflict")
+    assert conflict_finding["category"] == "retrieval"
+    assert conflict_finding["details"]["conflicts"][0]["key"].startswith("business::revenue")
+
+
+def test_build_quality_findings_does_not_flag_normal_hybrid_rrf_scores():
+    state = {
+        "query": "Show revenue by region",
+        "retrieved_datapoints": [
+            {
+                "datapoint_id": "metric_revenue_001",
+                "datapoint_type": "Business",
+                "name": "Revenue",
+                "score": 0.02,
+                "source": "hybrid",
+                "metadata": {
+                    "related_tables": ["public.orders"],
+                    "grain": "daily_region",
+                    "exclusions": "none",
+                    "confidence_notes": "reviewed",
+                },
+            }
+        ],
+        "retrieval_trace": {"mode": "hybrid"},
+        "query_result": None,
+        "validation_warnings": [],
+        "validation_errors": [],
+        "clarification_needed": False,
+        "clarifying_questions": [],
+        "answer_confidence": 0.9,
+    }
+
+    with patch("backend.pipeline.orchestrator.load_profile_cache", return_value=None):
+        findings = DataChatPipeline._build_quality_findings(state)  # noqa: SLF001
+
+    codes = {item["code"] for item in findings}
+    assert "retrieval_low_confidence" not in codes

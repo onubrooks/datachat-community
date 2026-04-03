@@ -250,3 +250,66 @@ def test_derive_table_purpose_is_useful_for_non_finance_domain():
     purpose = generator._derive_table_purpose(table)
 
     assert "support cases" in purpose.lower()
+
+
+@pytest.mark.asyncio
+async def test_metrics_batch_prefers_schema_qualified_table_keys():
+    profile = DatabaseProfile(
+        profile_id=uuid4(),
+        connection_id=uuid4(),
+        tables=[
+            TableProfile(
+                schema="public",
+                name="orders",
+                row_count=100,
+                columns=[
+                    ColumnProfile(
+                        name="amount",
+                        data_type="numeric",
+                        nullable=False,
+                        sample_values=["10.5", "20.0"],
+                    )
+                ],
+                relationships=[],
+                sample_size=2,
+            ),
+            TableProfile(
+                schema="analytics",
+                name="orders",
+                row_count=200,
+                columns=[
+                    ColumnProfile(
+                        name="gross_amount",
+                        data_type="numeric",
+                        nullable=False,
+                        sample_values=["50.0", "75.0"],
+                    )
+                ],
+                relationships=[],
+                sample_size=2,
+            ),
+        ],
+        created_at=datetime.now(UTC),
+    )
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Orders", "columns": {"amount": "Amount"}}',
+            '{"business_purpose": "Orders analytics", "columns": {"gross_amount": "Gross amount"}}',
+            '{"public.orders": {"metrics": [{"name": "Public Orders Total", "calculation": "SUM(amount)", "aggregation": "SUM", "unit": "USD", "confidence": 0.7}]}, "analytics.orders": {"metrics": [{"name": "Analytics Orders Total", "calculation": "SUM(gross_amount)", "aggregation": "SUM", "unit": "USD", "confidence": 0.8}]}}',
+        ]
+    )
+
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    calculations = {item.datapoint["name"]: item.datapoint["calculation"] for item in generated.business_datapoints}
+    assert calculations["Public Orders Total"] == "SUM(amount)"
+    assert calculations["Analytics Orders Total"] == "SUM(gross_amount)"
+
+
+def test_numeric_type_detection_includes_real_double_and_number():
+    generator = DataPointGenerator(llm_provider=FakeLLM([]))
+
+    assert generator._is_numeric_type("double precision") is True
+    assert generator._is_numeric_type("real") is True
+    assert generator._is_numeric_type("number(18,2)") is True

@@ -7,6 +7,7 @@ Supports tables, columns, metrics, queries, and process dependencies.
 
 import json
 import logging
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -391,6 +392,44 @@ class KnowledgeGraph:
 
         return related_nodes
 
+    def search_nodes(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        """
+        Lightweight keyword search across graph nodes.
+
+        Used as a fallback when vector retrieval misses or is too weak to seed graph
+        traversal reliably. Scores nodes by token overlap across common descriptive
+        fields such as name, table_name, synonyms, and business metadata.
+        """
+        query_tokens = self._tokenize_text(query)
+        if not query_tokens:
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        for node_id, node_data in self.graph.nodes(data=True):
+            node_tokens = self._node_search_tokens(node_data)
+            if not node_tokens:
+                continue
+            overlap = query_tokens & node_tokens
+            if not overlap:
+                continue
+
+            score = len(overlap) / len(query_tokens)
+            candidates.append(
+                {
+                    "node_id": node_id,
+                    "score": score,
+                    "node_type": node_data.get("node_type"),
+                    "name": node_data.get("name"),
+                    "metadata": node_data.copy(),
+                    "matched_tokens": sorted(overlap),
+                }
+            )
+
+        candidates.sort(
+            key=lambda item: (-float(item["score"]), str(item.get("name") or item["node_id"]))
+        )
+        return candidates[:top_k]
+
     def find_path(
         self, source_id: str, target_id: str, cutoff: int | None = 5
     ) -> list[dict[str, Any]] | None:
@@ -624,6 +663,40 @@ class KnowledgeGraph:
             if node_data.get("node_type") == NodeType.PROCESS:
                 return process_id
         return None
+
+    @staticmethod
+    def _tokenize_text(value: Any) -> set[str]:
+        if value is None:
+            return set()
+        text = str(value).strip().lower()
+        if not text:
+            return set()
+        return {
+            token
+            for token in re.split(r"[^a-z0-9]+", text)
+            if token and len(token) > 1
+        }
+
+    def _node_search_tokens(self, node_data: dict[str, Any]) -> set[str]:
+        tokens: set[str] = set()
+
+        for field in (
+            "name",
+            "table_name",
+            "schema_name",
+            "business_purpose",
+            "description",
+            "calculation",
+        ):
+            tokens.update(self._tokenize_text(node_data.get(field)))
+
+        for list_field in ("synonyms", "related_tables", "tags", "dependencies"):
+            value = node_data.get(list_field)
+            if isinstance(value, list):
+                for item in value:
+                    tokens.update(self._tokenize_text(item))
+
+        return tokens
 
     def _find_metrics_by_synonyms(self, synonyms: list[str]) -> list[str]:
         """Find metric node IDs that share synonyms."""

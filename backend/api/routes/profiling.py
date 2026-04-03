@@ -529,9 +529,8 @@ async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJ
                     for table in profile.tables
                     if table.name in selected_tables
                     and any(
-                        token in col.data_type.lower()
+                        DataPointGenerator._is_numeric_data_type(col.data_type)
                         for col in table.columns
-                        for token in ["int", "numeric", "decimal", "float"]
                     )
                 ]
                 total_tables = len(eligible_tables)
