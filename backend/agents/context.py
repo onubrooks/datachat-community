@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 from backend.agents.base import BaseAgent
+from backend.domain_packs import DOMAIN_PACKS
 from backend.knowledge.retriever import RetrievalMode, RetrievalResult, RetrievedItem, Retriever
 from backend.models.agent import (
     AgentMetadata,
@@ -363,7 +364,7 @@ class ContextAgent(BaseAgent):
                         "confidence": confidence,
                     }
                 )
-                for alias in ContextAgent._finance_entity_aliases(value):
+                for alias in ContextAgent._domain_aliases(value):
                     alias_key = (str(entity_type), alias)
                     if alias_key in seen:
                         continue
@@ -378,36 +379,15 @@ class ContextAgent(BaseAgent):
         return hints
 
     @staticmethod
-    def _finance_entity_aliases(value: str) -> list[str]:
+    def _domain_aliases(value: str) -> list[str]:
         aliases: set[str] = set()
         normalized = value.strip().lower()
         if not normalized:
             return []
-
-        if "deposit" in normalized or normalized == "credit":
-            aliases.update({"deposits", "deposit", "credit", "credits", "inflow", "inflows"})
-        if "withdraw" in normalized or normalized == "debit":
-            aliases.update({"withdrawal", "withdrawals", "debit", "debits", "outflow", "outflows"})
-        if "customer segment" in normalized or normalized == "segment":
-            aliases.update({"segment", "segments", "customer segment", "customer segments"})
-        if "net flow" in normalized:
-            aliases.update({"net flow", "cash flow", "inflow minus outflow"})
-        if "stockout" in normalized or "out of stock" in normalized:
-            aliases.update(
-                {
-                    "stockout",
-                    "out of stock",
-                    "inventory risk",
-                    "reorder",
-                    "on hand",
-                    "reserved",
-                }
-            )
-        if "inventory" in normalized:
-            aliases.update({"stock", "on hand", "reserved", "reorder", "snapshot"})
-        if normalized in {"sku", "skus"}:
-            aliases.update({"sku", "skus", "product", "products", "item", "items"})
-
+        for pack in DOMAIN_PACKS:
+            if pack.expand_aliases is None:
+                continue
+            aliases.update(pack.expand_aliases(normalized))
         aliases.discard(normalized)
         return sorted(aliases)
 
