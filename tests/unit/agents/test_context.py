@@ -440,6 +440,21 @@ class TestEntityHandling:
         trace = output.data["retrieval_trace"]["entity_boosting"]
         assert trace["matched_items"]
 
+    def test_extract_entity_hints_expands_finance_aliases(self, context_agent):
+        entities = [
+            ExtractedEntity(entity_type="metric", value="deposits", confidence=0.95),
+            ExtractedEntity(entity_type="column", value="customer segment", confidence=0.9),
+        ]
+
+        hints = context_agent._extract_entity_hints(entities)
+        values = {hint["value"] for hint in hints}
+
+        assert "deposits" in values
+        assert "credit" in values
+        assert "inflow" in values
+        assert "customer segment" in values
+        assert "segment" in values
+
     @pytest.mark.asyncio
     async def test_works_without_entities(
         self, context_agent, mock_retriever, sample_retrieval_result

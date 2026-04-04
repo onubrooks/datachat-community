@@ -2467,6 +2467,22 @@ class TestQueryDataPointTemplates:
         assert "direction = 'credit'" in result.sql
         assert "INTERVAL '6 weeks'" in result.sql
 
+    def test_query_template_match_score_penalizes_balance_for_deposit_prompt(self, sql_agent):
+        deposit_score = sql_agent._query_template_match_score(
+            query_lower="show weekly deposit trend for the last 6 weeks from the last deposit date",
+            name_lower="weekly deposit trend from latest deposit date",
+            description_lower="shows weekly deposit totals from the latest deposit date",
+            tags=["weekly", "trend", "deposit", "credit", "latest_date_anchor"],
+        )
+        balance_score = sql_agent._query_template_match_score(
+            query_lower="show weekly deposit trend for the last 6 weeks from the last deposit date",
+            name_lower="weekly current balance trend",
+            description_lower="shows weekly current balance totals from account opening dates",
+            tags=["weekly", "trend", "balance", "accounts"],
+        )
+
+        assert deposit_score > balance_score
+
     @pytest.mark.asyncio
     async def test_generate_sql_uses_query_datapoint_template(self, sql_agent):
         """_generate_sql uses QueryDataPoint template when matched."""

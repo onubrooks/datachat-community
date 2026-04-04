@@ -363,7 +363,38 @@ class ContextAgent(BaseAgent):
                         "confidence": confidence,
                     }
                 )
+                for alias in ContextAgent._finance_entity_aliases(value):
+                    alias_key = (str(entity_type), alias)
+                    if alias_key in seen:
+                        continue
+                    seen.add(alias_key)
+                    hints.append(
+                        {
+                            "entity_type": str(entity_type),
+                            "value": alias,
+                            "confidence": max(0.55, confidence - 0.05),
+                        }
+                    )
         return hints
+
+    @staticmethod
+    def _finance_entity_aliases(value: str) -> list[str]:
+        aliases: set[str] = set()
+        normalized = value.strip().lower()
+        if not normalized:
+            return []
+
+        if "deposit" in normalized or normalized == "credit":
+            aliases.update({"deposits", "deposit", "credit", "credits", "inflow", "inflows"})
+        if "withdraw" in normalized or normalized == "debit":
+            aliases.update({"withdrawal", "withdrawals", "debit", "debits", "outflow", "outflows"})
+        if "customer segment" in normalized or normalized == "segment":
+            aliases.update({"segment", "segments", "customer segment", "customer segments"})
+        if "net flow" in normalized:
+            aliases.update({"net flow", "cash flow", "inflow minus outflow"})
+
+        aliases.discard(normalized)
+        return sorted(aliases)
 
     @staticmethod
     def _build_entity_aware_query(query: str, entity_hints: list[dict[str, Any]]) -> str:

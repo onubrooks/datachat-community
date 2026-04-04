@@ -3809,6 +3809,37 @@ class SQLAgent(BaseAgent):
         ):
             score += 1.5
 
+        query_mentions_deposit = any(
+            phrase in query_lower for phrase in ("deposit", "deposits", "credit", "credits")
+        )
+        query_mentions_withdrawal = any(
+            phrase in query_lower
+            for phrase in ("withdraw", "withdrawal", "withdrawals", "debit", "debits")
+        )
+        query_mentions_latest_anchor = "last deposit date" in query_lower or "latest deposit date" in query_lower
+        template_has_deposit = any(
+            token in template_text for token in ("deposit", "deposits", "credit", "credits", "inflow")
+        )
+        template_has_withdrawal = any(
+            token in template_text
+            for token in ("withdraw", "withdrawal", "withdrawals", "debit", "debits", "outflow")
+        )
+        template_is_account_balance = any(
+            token in template_text for token in ("balance", "account opening", "opened_at", "current balance")
+        )
+        template_has_anchor = "latest_date_anchor" in template_text or "latest deposit date" in template_text
+
+        if query_mentions_deposit and template_has_deposit:
+            score += 2.5
+        if query_mentions_withdrawal and template_has_withdrawal:
+            score += 2.5
+        if query_mentions_latest_anchor and template_has_anchor:
+            score += 3.0
+        if query_mentions_deposit and template_is_account_balance and not template_has_deposit:
+            score -= 3.5
+        if query_mentions_withdrawal and template_is_account_balance and not template_has_withdrawal:
+            score -= 3.5
+
         return score
 
     def _tokenize_template_match_terms(self, text: str) -> set[str]:
