@@ -181,10 +181,10 @@ SELECT
 FROM public.bank_customers
 WHERE segment IN ('sme', 'corporate');
 
--- Daily transactional activity over ~5.5 months with deterministic status/failure patterns.
+-- Daily transactional activity through April 2026 with deterministic status/failure patterns.
 WITH days AS (
     SELECT gs::date AS business_date
-    FROM generate_series('2025-09-01'::date, '2026-02-14'::date, interval '1 day') gs
+    FROM generate_series('2025-09-01'::date, '2026-04-30'::date, interval '1 day') gs
 ),
 active_accounts AS (
     SELECT account_id, account_type, currency_code, status
@@ -412,7 +412,7 @@ FROM (
 
 WITH payment_months AS (
     SELECT gs::date AS payment_date
-    FROM generate_series('2025-01-15'::date, '2026-02-15'::date, interval '1 month') gs
+    FROM generate_series('2025-01-15'::date, '2026-04-15'::date, interval '1 month') gs
 ),
 loan_schedule AS (
     SELECT
@@ -455,10 +455,10 @@ SELECT
     END AS status
 FROM loan_schedule;
 
--- Daily FX rates for multiple pairs over the same ~5.5 month period.
+-- Daily FX rates for multiple pairs over the same seeded period.
 WITH days AS (
     SELECT gs::date AS rate_date
-    FROM generate_series('2025-09-01'::date, '2026-02-14'::date, interval '1 day') gs
+    FROM generate_series('2025-09-01'::date, '2026-04-30'::date, interval '1 day') gs
 ),
 quotes AS (
     SELECT * FROM (VALUES
