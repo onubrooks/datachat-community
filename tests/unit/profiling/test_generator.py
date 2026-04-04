@@ -127,6 +127,54 @@ def _fintech_flow_profile():
     )
 
 
+def _fintech_transactions_profile():
+    table = TableProfile(
+        schema="public",
+        name="bank_transactions",
+        row_count=500,
+        columns=[
+            ColumnProfile(
+                name="business_date",
+                data_type="date",
+                nullable=False,
+                sample_values=["2026-04-30", "2026-04-29"],
+                distinct_count=120,
+            ),
+            ColumnProfile(
+                name="direction",
+                data_type="varchar",
+                nullable=False,
+                sample_values=["credit", "debit"],
+                distinct_count=2,
+            ),
+            ColumnProfile(
+                name="amount",
+                data_type="numeric",
+                nullable=False,
+                sample_values=["1500", "2100"],
+                distinct_count=320,
+                min_value="0",
+                max_value="5000",
+            ),
+            ColumnProfile(
+                name="status",
+                data_type="varchar",
+                nullable=False,
+                sample_values=["posted", "pending"],
+                distinct_count=3,
+            ),
+        ],
+        relationships=[],
+        sample_size=2,
+    )
+    return DatabaseProfile(
+        profile_id=uuid4(),
+        connection_id=uuid4(),
+        tables=[table],
+        created_at=datetime.now(UTC),
+    )
+
+
 @pytest.mark.asyncio
 async def test_generates_schema_datapoints_from_profile():
     profile = _sample_profile()
@@ -207,6 +255,34 @@ async def test_generates_query_datapoints_from_profile():
     assert "query_public_orders_avg_customer_segment_total_amount" in query_ids
     assert "query_public_orders_share_customer_segment_total_amount" in query_ids
     assert "query_public_orders_monthly_total_amount_trend" in query_ids
+
+
+@pytest.mark.asyncio
+async def test_generates_deposit_and_withdrawal_trends_from_transaction_table():
+    profile = _fintech_transactions_profile()
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Bank transactions", "columns": {"business_date": "Business date", "direction": "Direction", "amount": "Amount"}}',
+            '{"public.bank_transactions": {"metrics": []}}',
+        ]
+    )
+
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    ids = {item.datapoint["datapoint_id"] for item in generated.query_datapoints}
+    assert "query_public_bank_transactions_weekly_deposit_trend" in ids
+    assert "query_public_bank_transactions_monthly_deposit_trend" in ids
+    assert "query_public_bank_transactions_weekly_withdrawal_trend" in ids
+
+    deposit_dp = next(
+        item.datapoint
+        for item in generated.query_datapoints
+        if item.datapoint["datapoint_id"] == "query_public_bank_transactions_weekly_deposit_trend"
+    )
+    assert "MAX(business_date)" in deposit_dp["sql_template"]
+    assert "direction = 'credit'" in deposit_dp["sql_template"]
+    assert "latest deposit date" in deposit_dp["description"].lower()
 
 
 @pytest.mark.asyncio

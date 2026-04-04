@@ -2394,6 +2394,79 @@ class TestQueryDataPointTemplates:
         assert result.used_datapoints == ["query_wow_decline_001"]
         assert "LIMIT 2" in result.sql
 
+    def test_try_query_datapoint_template_prefers_deposit_trend_over_generic_balance(
+        self, sql_agent
+    ):
+        memory = InvestigationMemory(
+            query="Show weekly deposit trend for the last 6 weeks from the last deposit date",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="query_weekly_balance_001",
+                    datapoint_type="Query",
+                    name="Weekly Current Balance Trend",
+                    score=0.93,
+                    source="vector",
+                    metadata={
+                        "sql_template": (
+                            "SELECT DATE_TRUNC('week', opened_at) AS week_start, "
+                            "SUM(current_balance) AS total_current_balance "
+                            "FROM public.bank_accounts "
+                            "WHERE opened_at >= CURRENT_DATE - INTERVAL '{lookback_weeks} weeks' "
+                            "GROUP BY 1 ORDER BY 1 DESC"
+                        ),
+                        "query_description": "Shows weekly current balance totals from account opening dates.",
+                        "parameters": json.dumps(
+                            {"lookback_weeks": {"type": "integer", "default": 8}}
+                        ),
+                        "tags": "weekly,trend,balance,accounts",
+                    },
+                ),
+                RetrievedDataPoint(
+                    datapoint_id="query_weekly_deposit_001",
+                    datapoint_type="Query",
+                    name="Weekly Deposit Trend from Latest Deposit Date",
+                    score=0.9,
+                    source="vector",
+                    metadata={
+                        "sql_template": (
+                            "WITH anchor AS ("
+                            "SELECT MAX(business_date) AS anchor_date "
+                            "FROM public.bank_transactions WHERE direction = 'credit'"
+                            ") "
+                            "SELECT DATE_TRUNC('week', business_date) AS week_start, "
+                            "SUM(amount) AS total_deposit_amount "
+                            "FROM public.bank_transactions "
+                            "WHERE direction = 'credit' "
+                            "AND business_date >= COALESCE((SELECT anchor_date FROM anchor), CURRENT_DATE) "
+                            "- INTERVAL '{lookback_weeks} weeks' "
+                            "GROUP BY 1 ORDER BY 1 DESC"
+                        ),
+                        "query_description": (
+                            "Shows weekly deposit totals from the latest deposit date."
+                        ),
+                        "parameters": json.dumps(
+                            {"lookback_weeks": {"type": "integer", "default": 8}}
+                        ),
+                        "tags": "weekly,trend,deposit,credit,latest_date_anchor",
+                    },
+                ),
+            ],
+            total_retrieved=2,
+            retrieval_mode="hybrid",
+            sources_used=["query_weekly_balance_001", "query_weekly_deposit_001"],
+        )
+        sql_input = SQLAgentInput(
+            query="Show weekly deposit trend for the last 6 weeks from the last deposit date",
+            investigation_memory=memory,
+        )
+
+        result = sql_agent._try_query_datapoint_template(sql_input)
+
+        assert result is not None
+        assert result.used_datapoints == ["query_weekly_deposit_001"]
+        assert "direction = 'credit'" in result.sql
+        assert "INTERVAL '6 weeks'" in result.sql
+
     @pytest.mark.asyncio
     async def test_generate_sql_uses_query_datapoint_template(self, sql_agent):
         """_generate_sql uses QueryDataPoint template when matched."""

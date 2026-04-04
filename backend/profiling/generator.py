@@ -896,6 +896,7 @@ class DataPointGenerator:
         dimension_column = self._select_dimension_column(table.columns)
 
         query_points: list[GeneratedDataPoint] = []
+        query_points.extend(self._build_transaction_flow_query_datapoints(table=table))
         primary_measure = numeric_columns[0] if numeric_columns else None
         if primary_measure and dimension_column:
             query_points.extend(
@@ -975,6 +976,102 @@ class DataPointGenerator:
             }
         )
         return metadata
+
+    @staticmethod
+    def _anchor_ref_expr(
+        *,
+        dialect: str,
+        table_key: str,
+        time_column_name: str,
+        filter_clause: str | None = None,
+    ) -> tuple[str, str]:
+        where_clause = f" WHERE {filter_clause}" if filter_clause else ""
+        if dialect == "clickhouse":
+            prefix = (
+                f"WITH (SELECT max({time_column_name}) FROM {table_key}{where_clause}) AS anchor_date "
+            )
+            return prefix, "coalesce(anchor_date, today())"
+
+        prefix = (
+            f"WITH anchor AS (SELECT MAX({time_column_name}) AS anchor_date FROM "
+            f"{table_key}{where_clause}) "
+        )
+        return prefix, "COALESCE((SELECT anchor_date FROM anchor), CURRENT_DATE)"
+
+    def _build_transaction_flow_query_datapoints(
+        self, *, table: TableProfile
+    ) -> list[GeneratedDataPoint]:
+        time_column = self._select_time_column(table.columns)
+        if time_column is None:
+            return []
+
+        amount_column = next(
+            (
+                column
+                for column in self._select_measure_columns(table.columns, limit=3)
+                if "amount" in column.name.lower()
+            ),
+            None,
+        )
+        if amount_column is None:
+            return []
+
+        direction_column = next(
+            (
+                column
+                for column in table.columns
+                if not self._is_numeric_data_type(column.data_type)
+                and any(token in column.name.lower() for token in ("direction", "flow_direction"))
+                and any(
+                    value.lower() in {"credit", "debit"}
+                    for value in column.sample_values
+                    if isinstance(value, str)
+                )
+            ),
+            None,
+        )
+        if direction_column is None:
+            return []
+
+        query_points = [
+            self._build_filtered_flow_trend_query_datapoint(
+                table=table,
+                time_column=time_column,
+                amount_column=amount_column,
+                direction_column=direction_column,
+                event_name="Deposit",
+                direction_value="credit",
+                time_grain="week",
+            ),
+            self._build_filtered_flow_trend_query_datapoint(
+                table=table,
+                time_column=time_column,
+                amount_column=amount_column,
+                direction_column=direction_column,
+                event_name="Deposit",
+                direction_value="credit",
+                time_grain="month",
+            ),
+            self._build_filtered_flow_trend_query_datapoint(
+                table=table,
+                time_column=time_column,
+                amount_column=amount_column,
+                direction_column=direction_column,
+                event_name="Withdrawal",
+                direction_value="debit",
+                time_grain="week",
+            ),
+            self._build_filtered_flow_trend_query_datapoint(
+                table=table,
+                time_column=time_column,
+                amount_column=amount_column,
+                direction_column=direction_column,
+                event_name="Withdrawal",
+                direction_value="debit",
+                time_grain="month",
+            ),
+        ]
+        return query_points
 
     @staticmethod
     def _measure_priority(column: ColumnProfile) -> tuple[int, int]:
@@ -1211,27 +1308,45 @@ class DataPointGenerator:
             group_dimension = f", {dimension_column.name}"
             description_suffix = f" by {self._title_case(dimension_column.name).lower()}"
 
+        postgres_prefix, postgres_anchor_ref = self._anchor_ref_expr(
+            dialect="postgresql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
         postgres_template = (
+            f"{postgres_prefix}"
             f"SELECT DATE_TRUNC('week', {time_column.name}) AS week_start{group_dimension}, "
             f"SUM({measure_column.name}) AS total_{measure_slug} "
             f"FROM {table_key} "
-            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL '{{lookback_weeks}} weeks' "
+            f"WHERE {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{lookback_weeks}} weeks' "
             f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
             f"ORDER BY 1 DESC"
         )
+        mysql_prefix, mysql_anchor_ref = self._anchor_ref_expr(
+            dialect="mysql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
         mysql_variant = (
+            f"{mysql_prefix}"
             f"SELECT DATE_SUB(DATE({time_column.name}), INTERVAL WEEKDAY({time_column.name}) DAY) AS week_start{group_dimension}, "
             f"SUM({measure_column.name}) AS total_{measure_slug} "
             f"FROM {table_key} "
-            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL {{lookback_weeks}} WEEK "
+            f"WHERE {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{lookback_weeks}} WEEK) "
             f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
             f"ORDER BY 1 DESC"
         )
+        clickhouse_prefix, clickhouse_anchor_ref = self._anchor_ref_expr(
+            dialect="clickhouse",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
         clickhouse_variant = (
+            f"{clickhouse_prefix}"
             f"SELECT toStartOfWeek({time_column.name}) AS week_start{group_dimension}, "
             f"sum({measure_column.name}) AS total_{measure_slug} "
             f"FROM {table_key} "
-            f"WHERE {time_column.name} >= today() - INTERVAL {{lookback_weeks}} WEEK "
+            f"WHERE {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{lookback_weeks}} WEEK "
             f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
             f"ORDER BY 1 DESC"
         )
@@ -1298,27 +1413,45 @@ class DataPointGenerator:
             group_dimension = f", {dimension_column.name}"
             description_suffix = f" by {self._title_case(dimension_column.name).lower()}"
 
+        postgres_prefix, postgres_anchor_ref = self._anchor_ref_expr(
+            dialect="postgresql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
         postgres_template = (
+            f"{postgres_prefix}"
             f"SELECT DATE_TRUNC('month', {time_column.name}) AS month_start{group_dimension}, "
             f"SUM({measure_column.name}) AS total_{measure_slug} "
             f"FROM {table_key} "
-            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL '{{lookback_months}} months' "
+            f"WHERE {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{lookback_months}} months' "
             f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
             f"ORDER BY 1 DESC"
         )
+        mysql_prefix, mysql_anchor_ref = self._anchor_ref_expr(
+            dialect="mysql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
         mysql_variant = (
+            f"{mysql_prefix}"
             f"SELECT DATE_FORMAT({time_column.name}, '%Y-%m-01') AS month_start{group_dimension}, "
             f"SUM({measure_column.name}) AS total_{measure_slug} "
             f"FROM {table_key} "
-            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL {{lookback_months}} MONTH "
+            f"WHERE {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{lookback_months}} MONTH) "
             f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
             f"ORDER BY 1 DESC"
         )
+        clickhouse_prefix, clickhouse_anchor_ref = self._anchor_ref_expr(
+            dialect="clickhouse",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
         clickhouse_variant = (
+            f"{clickhouse_prefix}"
             f"SELECT toStartOfMonth({time_column.name}) AS month_start{group_dimension}, "
             f"sum({measure_column.name}) AS total_{measure_slug} "
             f"FROM {table_key} "
-            f"WHERE {time_column.name} >= today() - INTERVAL {{lookback_months}} MONTH "
+            f"WHERE {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{lookback_months}} MONTH "
             f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
             f"ORDER BY 1 DESC"
         )
@@ -1393,36 +1526,54 @@ class DataPointGenerator:
             return None
 
         table_key = f"{table.schema_name}.{table.name}"
+        postgres_prefix, postgres_anchor_ref = self._anchor_ref_expr(
+            dialect="postgresql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
         postgres_template = (
+            f"{postgres_prefix}"
             f"SELECT DATE_TRUNC('week', {time_column.name}) AS week_start, "
             f"{dimension_column.name}, "
             f"SUM({deposits_column.name}) AS total_deposits, "
             f"SUM({withdrawals_column.name}) AS total_withdrawals, "
             f"SUM({deposits_column.name}) - SUM({withdrawals_column.name}) AS net_flow "
             f"FROM {table_key} "
-            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL '{{lookback_weeks}} weeks' "
+            f"WHERE {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{lookback_weeks}} weeks' "
             f"GROUP BY 1, 2 "
             f"ORDER BY 1 DESC, net_flow DESC"
         )
+        mysql_prefix, mysql_anchor_ref = self._anchor_ref_expr(
+            dialect="mysql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
         mysql_variant = (
+            f"{mysql_prefix}"
             f"SELECT DATE_SUB(DATE({time_column.name}), INTERVAL WEEKDAY({time_column.name}) DAY) AS week_start, "
             f"{dimension_column.name}, "
             f"SUM({deposits_column.name}) AS total_deposits, "
             f"SUM({withdrawals_column.name}) AS total_withdrawals, "
             f"SUM({deposits_column.name}) - SUM({withdrawals_column.name}) AS net_flow "
             f"FROM {table_key} "
-            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL {{lookback_weeks}} WEEK "
+            f"WHERE {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{lookback_weeks}} WEEK) "
             f"GROUP BY 1, 2 "
             f"ORDER BY 1 DESC, net_flow DESC"
         )
+        clickhouse_prefix, clickhouse_anchor_ref = self._anchor_ref_expr(
+            dialect="clickhouse",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
         clickhouse_variant = (
+            f"{clickhouse_prefix}"
             f"SELECT toStartOfWeek({time_column.name}) AS week_start, "
             f"{dimension_column.name}, "
             f"sum({deposits_column.name}) AS total_deposits, "
             f"sum({withdrawals_column.name}) AS total_withdrawals, "
             f"sum({deposits_column.name}) - sum({withdrawals_column.name}) AS net_flow "
             f"FROM {table_key} "
-            f"WHERE {time_column.name} >= today() - INTERVAL {{lookback_weeks}} WEEK "
+            f"WHERE {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{lookback_weeks}} WEEK "
             f"GROUP BY 1, 2 "
             f"ORDER BY 1 DESC, net_flow DESC"
         )
@@ -1470,6 +1621,163 @@ class DataPointGenerator:
             datapoint=datapoint.model_dump(mode="json", by_alias=True),
             confidence=0.8,
             explanation="Heuristic net-flow template generated from paired deposit and withdrawal measures.",
+        )
+
+    def _build_filtered_flow_trend_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        time_column: ColumnProfile,
+        amount_column: ColumnProfile,
+        direction_column: ColumnProfile,
+        event_name: str,
+        direction_value: str,
+        time_grain: str,
+    ) -> GeneratedDataPoint:
+        table_key = f"{table.schema_name}.{table.name}"
+        amount_slug = self._slugify(amount_column.name)
+        event_slug = self._slugify(event_name)
+        filter_clause = f"{direction_column.name} = '{direction_value}'"
+        parameter_name = "lookback_weeks" if time_grain == "week" else "lookback_months"
+        parameter_unit = "weeks" if time_grain == "week" else "months"
+        default_value = 8 if time_grain == "week" else 6
+
+        postgres_prefix, postgres_anchor_ref = self._anchor_ref_expr(
+            dialect="postgresql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+            filter_clause=filter_clause,
+        )
+        mysql_prefix, mysql_anchor_ref = self._anchor_ref_expr(
+            dialect="mysql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+            filter_clause=filter_clause,
+        )
+        clickhouse_prefix, clickhouse_anchor_ref = self._anchor_ref_expr(
+            dialect="clickhouse",
+            table_key=table_key,
+            time_column_name=time_column.name,
+            filter_clause=filter_clause,
+        )
+
+        if time_grain == "week":
+            grain_label = "weekly"
+            postgres_template = (
+                f"{postgres_prefix}"
+                f"SELECT DATE_TRUNC('week', {time_column.name}) AS week_start, "
+                f"SUM({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{{parameter_name}}} weeks' "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            mysql_variant = (
+                f"{mysql_prefix}"
+                f"SELECT DATE_SUB(DATE({time_column.name}), INTERVAL WEEKDAY({time_column.name}) DAY) AS week_start, "
+                f"SUM({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{{parameter_name}}} WEEK) "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            clickhouse_variant = (
+                f"{clickhouse_prefix}"
+                f"SELECT toStartOfWeek({time_column.name}) AS week_start, "
+                f"sum({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{{parameter_name}}} WEEK "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            query_family = f"{grain_label}_{event_slug}_trend"
+            name = f"Weekly {event_name} Trend from Latest {event_name} Date"
+        else:
+            grain_label = "monthly"
+            postgres_template = (
+                f"{postgres_prefix}"
+                f"SELECT DATE_TRUNC('month', {time_column.name}) AS month_start, "
+                f"SUM({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{{parameter_name}}} months' "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            mysql_variant = (
+                f"{mysql_prefix}"
+                f"SELECT DATE_FORMAT({time_column.name}, '%Y-%m-01') AS month_start, "
+                f"SUM({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{{parameter_name}}} MONTH) "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            clickhouse_variant = (
+                f"{clickhouse_prefix}"
+                f"SELECT toStartOfMonth({time_column.name}) AS month_start, "
+                f"sum({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{{parameter_name}}} MONTH "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            query_family = f"{grain_label}_{event_slug}_trend"
+            name = f"Monthly {event_name} Trend from Latest {event_name} Date"
+
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, f"{grain_label}_{event_slug}_trend"),
+            name=name,
+            sql_template=postgres_template,
+            parameters={
+                parameter_name: QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=default_value,
+                    description=f"Number of recent {parameter_unit} to include.",
+                )
+            },
+            description=(
+                f"Shows {time_grain}ly {event_name.lower()} totals using {amount_column.name} "
+                f"and anchors the lookback on the latest {event_name.lower()} date in {table_key}."
+            ),
+            backend_variants={
+                "mysql": mysql_variant,
+                "clickhouse": clickhouse_variant,
+            },
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                f"{time_grain}ly",
+                "trend",
+                event_slug,
+                direction_value,
+                "latest_date_anchor",
+                self._slugify(direction_column.name),
+                amount_slug,
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family=query_family,
+                primary_dimension=None,
+                primary_measure=amount_column.name,
+                time_grain=time_grain,
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.83,
+            explanation=(
+                f"Transaction-flow {time_grain} trend template generated from "
+                f"{direction_column.name}={direction_value} and anchored on the latest matching date."
+            ),
         )
 
     def _derive_table_purpose(self, table: TableProfile) -> str:
