@@ -98,7 +98,7 @@ def _normalize_table_name(name: str) -> str:
 def _extract_table_keys(datapoint) -> list[str]:
     if datapoint.type == "Schema":
         return [_normalize_table_name(datapoint.table_name)]
-    if datapoint.type == "Business" and datapoint.related_tables:
+    if datapoint.type in {"Business", "Query"} and datapoint.related_tables:
         return [_normalize_table_name(table) for table in datapoint.related_tables]
     return []
 
@@ -124,7 +124,7 @@ def _remove_existing_datapoints_for_table(
             if table_name and _normalize_table_name(table_name) == table_key:
                 path.unlink(missing_ok=True)
                 removed_ids.append(datapoint_id)
-        elif datapoint_type == "Business":
+        elif datapoint_type in {"Business", "Query"}:
             related_tables = payload.get("related_tables") or []
             if any(_normalize_table_name(table) == table_key for table in related_tables):
                 path.unlink(missing_ok=True)
@@ -571,7 +571,7 @@ async def generate_datapoints(payload: GenerateDataPointsRequest) -> GenerationJ
                     datapoint=item.datapoint,
                     confidence=item.confidence,
                 )
-                for item in generated.schema_datapoints + generated.business_datapoints
+                for item in generated.all_items()
             ]
 
             await store.add_pending_datapoints(profile.profile_id, pending_items)

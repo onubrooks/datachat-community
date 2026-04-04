@@ -35,6 +35,7 @@ def datapoint_quality_report(limit: int = 20, ctx: ToolContext | None = None) ->
 
     schema_items = [dp for dp in datapoints if dp.get("type") == "Schema"]
     business_items = [dp for dp in datapoints if dp.get("type") == "Business"]
+    query_items = [dp for dp in datapoints if dp.get("type") == "Query"]
 
     weak_schema = []
     for dp in schema_items:
@@ -94,6 +95,7 @@ def datapoint_quality_report(limit: int = 20, ctx: ToolContext | None = None) ->
         "total_datapoints": len(datapoints),
         "schema_datapoints": len(schema_items),
         "business_datapoints": len(business_items),
+        "query_datapoints": len(query_items),
         "weak_schema": weak_schema[:limit],
         "weak_business": weak_business[:limit],
         "duplicate_metrics": duplicate_metric_groups[:limit],

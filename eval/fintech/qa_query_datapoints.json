@@ -1,0 +1,17 @@
+[
+  {
+    "query": "Show total deposits, withdrawals, and net flow by customer segment for the last 8 weeks.",
+    "expected_sql_contains": ["customer_segment", "deposit", "withdraw", "net_flow", "group by"],
+    "expected_answer_type": "table"
+  },
+  {
+    "query": "Show top 5 customer segments by deposits.",
+    "expected_sql_contains": ["customer_segment", "deposit", "sum", "limit 5"],
+    "expected_answer_type": "table"
+  },
+  {
+    "query": "Show weekly deposit trend for the last 6 weeks.",
+    "expected_sql_contains": ["deposit", "sum", "week", "group by"],
+    "expected_answer_type": "time_series"
+  }
+]

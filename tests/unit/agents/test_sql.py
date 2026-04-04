@@ -2269,6 +2269,33 @@ class TestQueryDataPointTemplates:
 
         assert result == "SELECT * FROM users LIMIT 5"
 
+    def test_fill_template_defaults_extracts_top_n_from_query(self, sql_agent):
+        sql = "SELECT customer_id FROM orders ORDER BY revenue DESC LIMIT {top_n}"
+        params = {"top_n": {"type": "integer", "default": 10}}
+
+        result = sql_agent._fill_template_defaults(
+            sql,
+            params,
+            query="Show top 3 customers by revenue",
+        )
+
+        assert result == "SELECT customer_id FROM orders ORDER BY revenue DESC LIMIT 3"
+
+    def test_fill_template_defaults_extracts_lookback_weeks_from_query(self, sql_agent):
+        sql = (
+            "SELECT DATE_TRUNC('week', created_at) AS week_start "
+            "FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '{lookback_weeks} weeks'"
+        )
+        params = {"lookback_weeks": {"type": "integer", "default": 8}}
+
+        result = sql_agent._fill_template_defaults(
+            sql,
+            params,
+            query="Show orders for the last 6 weeks",
+        )
+
+        assert "INTERVAL '6 weeks'" in result
+
     def test_query_matches_template_by_name_overlap(self, sql_agent):
         """Matches when query shares words with template name."""
         query = "show top customers by revenue"

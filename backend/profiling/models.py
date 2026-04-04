@@ -137,6 +137,14 @@ class GeneratedDataPoints(BaseModel):
     profile_id: UUID
     schema_datapoints: list[GeneratedDataPoint]
     business_datapoints: list[GeneratedDataPoint]
+    query_datapoints: list[GeneratedDataPoint] = Field(default_factory=list)
+
+    def all_items(self) -> list[GeneratedDataPoint]:
+        return [
+            *self.schema_datapoints,
+            *self.business_datapoints,
+            *self.query_datapoints,
+        ]
 
 
 class PendingDataPoint(BaseModel):

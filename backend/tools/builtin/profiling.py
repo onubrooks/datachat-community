@@ -76,7 +76,7 @@ async def profile_and_generate_datapoints(
                 datapoint=item.datapoint,
                 confidence=item.confidence,
             )
-            for item in generated.schema_datapoints + generated.business_datapoints
+            for item in generated.all_items()
         ]
         if pending:
             await store.add_pending_datapoints(profile.profile_id, pending)

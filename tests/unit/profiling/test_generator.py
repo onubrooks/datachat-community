@@ -70,6 +70,56 @@ def _sample_profile():
     )
 
 
+def _fintech_flow_profile():
+    table = TableProfile(
+        schema="public",
+        name="segment_flows",
+        row_count=240,
+        columns=[
+            ColumnProfile(
+                name="customer_segment",
+                data_type="varchar",
+                nullable=False,
+                sample_values=["retail", "smb"],
+                distinct_count=4,
+            ),
+            ColumnProfile(
+                name="week_start",
+                data_type="timestamp",
+                nullable=False,
+                sample_values=["2026-01-05"],
+                distinct_count=24,
+            ),
+            ColumnProfile(
+                name="deposit_amount",
+                data_type="numeric",
+                nullable=False,
+                sample_values=["1500", "2100"],
+                distinct_count=180,
+                min_value="0",
+                max_value="5000",
+            ),
+            ColumnProfile(
+                name="withdrawal_amount",
+                data_type="numeric",
+                nullable=False,
+                sample_values=["300", "900"],
+                distinct_count=160,
+                min_value="0",
+                max_value="4800",
+            ),
+        ],
+        relationships=[],
+        sample_size=2,
+    )
+    return DatabaseProfile(
+        profile_id=uuid4(),
+        connection_id=uuid4(),
+        tables=[table],
+        created_at=datetime.now(UTC),
+    )
+
+
 @pytest.mark.asyncio
 async def test_generates_schema_datapoints_from_profile():
     profile = _sample_profile()
@@ -122,6 +172,52 @@ async def test_suggests_metrics_from_numeric_columns():
     assert metric["metadata"]["grain"] == "table-level"
     assert metric["metadata"]["exclusions"]
     assert metric["metadata"]["confidence_notes"]
+
+
+@pytest.mark.asyncio
+async def test_generates_query_datapoints_from_profile():
+    profile = _sample_profile()
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Orders", "columns": {"order_id": "Order id", "total_amount": "Total", "created_at": "Date"}}',
+            '{"public.orders": {"metrics": []}}',
+        ]
+    )
+
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    assert generated.query_datapoints
+    query_dp = generated.query_datapoints[0].datapoint
+    assert query_dp["type"] == "Query"
+    assert query_dp["metadata"]["connection_id"] == str(profile.connection_id)
+    assert query_dp["metadata"]["grain"] == "query-level"
+    assert query_dp["related_tables"] == ["public.orders"]
+    assert query_dp["sql_template"]
+
+
+@pytest.mark.asyncio
+async def test_generates_net_flow_query_datapoint_when_columns_exist():
+    profile = _fintech_flow_profile()
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Segment flows", "columns": {"customer_segment": "Segment", "week_start": "Week", "deposit_amount": "Deposits", "withdrawal_amount": "Withdrawals"}}',
+            '{"public.segment_flows": {"metrics": []}}',
+        ]
+    )
+
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    ids = [item.datapoint["datapoint_id"] for item in generated.query_datapoints]
+    assert "query_public_segment_flows_weekly_net_flow_by_dimension" in ids
+    net_flow_dp = next(
+        item.datapoint
+        for item in generated.query_datapoints
+        if item.datapoint["datapoint_id"] == "query_public_segment_flows_weekly_net_flow_by_dimension"
+    )
+    assert "net_flow" in net_flow_dp["sql_template"].lower()
+    assert "lookback_weeks" in net_flow_dp["parameters"]
 
 
 @pytest.mark.asyncio

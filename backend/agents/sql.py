@@ -3710,7 +3710,7 @@ class SQLAgent(BaseAgent):
         ):
             sql = backend_variants[db_type]
 
-        sql = self._fill_template_defaults(sql, metadata.get("parameters"))
+        sql = self._fill_template_defaults(sql, metadata.get("parameters"), input.query)
 
         logger.info(
             f"Using QueryDataPoint template: {matched_dp.datapoint_id}",
@@ -3861,6 +3861,7 @@ class SQLAgent(BaseAgent):
         self,
         sql_template: str,
         parameters: dict[str, Any] | str | None,
+        query: str | None = None,
     ) -> str:
         """
         Fill SQL template placeholders with default values.
@@ -3885,6 +3886,7 @@ class SQLAgent(BaseAgent):
             return sql_template
 
         sql = sql_template
+        query_lower = (query or "").lower()
         for param_name, param_def in parameters.items():
             placeholder = f"{{{param_name}}}"
             if placeholder not in sql:
@@ -3893,7 +3895,13 @@ class SQLAgent(BaseAgent):
             if not isinstance(param_def, dict):
                 continue
 
-            default_value = param_def.get("default")
+            default_value = self._extract_template_parameter_value(
+                query_lower=query_lower,
+                param_name=param_name,
+                param_def=param_def,
+            )
+            if default_value is None:
+                default_value = param_def.get("default")
             if default_value is None:
                 continue
 
@@ -3910,6 +3918,60 @@ class SQLAgent(BaseAgent):
             sql = sql.replace(placeholder, formatted_value)
 
         return sql
+
+    def _extract_template_parameter_value(
+        self,
+        *,
+        query_lower: str,
+        param_name: str,
+        param_def: dict[str, Any],
+    ) -> Any:
+        if not query_lower:
+            return None
+
+        param_type = str(param_def.get("type") or "string").lower()
+        if param_type not in {"integer", "float"}:
+            return None
+
+        name = param_name.lower()
+        integer_patterns = []
+        if any(token in name for token in ("top", "limit", "count", "rows", "n")):
+            integer_patterns.extend(
+                [
+                    r"\btop\s+(\d+)\b",
+                    r"\blimit\s+(\d+)\b",
+                    r"\bfirst\s+(\d+)\b",
+                ]
+            )
+        if "week" in name:
+            integer_patterns.extend(
+                [r"\blast\s+(\d+)\s+weeks?\b", r"\b(\d+)\s+weeks?\b"]
+            )
+        if "day" in name:
+            integer_patterns.extend(
+                [r"\blast\s+(\d+)\s+days?\b", r"\b(\d+)\s+days?\b"]
+            )
+        if "month" in name:
+            integer_patterns.extend(
+                [r"\blast\s+(\d+)\s+months?\b", r"\b(\d+)\s+months?\b"]
+            )
+        if "year" in name:
+            integer_patterns.extend(
+                [r"\blast\s+(\d+)\s+years?\b", r"\b(\d+)\s+years?\b"]
+            )
+
+        for pattern in integer_patterns:
+            match = re.search(pattern, query_lower)
+            if not match:
+                continue
+            value = match.group(1)
+            try:
+                if param_type == "float":
+                    return float(value)
+                return int(value)
+            except ValueError:
+                continue
+        return None
 
     def _apply_context_accuracy_guards(
         self, generated_sql: GeneratedSQL, input: SQLAgentInput

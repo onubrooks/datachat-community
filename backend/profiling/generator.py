@@ -8,7 +8,13 @@ from collections.abc import Iterable
 
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
-from backend.models.datapoint import BusinessDataPoint, ColumnMetadata, SchemaDataPoint
+from backend.models.datapoint import (
+    BusinessDataPoint,
+    ColumnMetadata,
+    QueryDataPoint,
+    QueryParameter,
+    SchemaDataPoint,
+)
 from backend.profiling.models import (
     ColumnProfile,
     DatabaseProfile,
@@ -52,6 +58,7 @@ class DataPointGenerator:
     ) -> GeneratedDataPoints:
         selected_tables = self._select_tables(profile.tables, tables, max_tables)
         schema_points: list[GeneratedDataPoint] = []
+        query_points: list[GeneratedDataPoint] = []
 
         use_llm_schema = depth == "metrics_full"
         for idx, table in enumerate(selected_tables, start=1):
@@ -59,6 +66,8 @@ class DataPointGenerator:
                 schema_points.append(await self._generate_schema_datapoint(table, idx))
             else:
                 schema_points.append(self._generate_schema_datapoint_deterministic(table, idx))
+            if depth != "schema_only":
+                query_points.extend(self._generate_query_datapoints(table))
 
         business_points: list[GeneratedDataPoint] = []
         if depth == "schema_only":
@@ -67,6 +76,7 @@ class DataPointGenerator:
                     profile_id=profile.profile_id,
                     schema_datapoints=schema_points,
                     business_datapoints=business_points,
+                    query_datapoints=query_points,
                 )
             )
             self._attach_connection_metadata(result, str(profile.connection_id))
@@ -92,6 +102,7 @@ class DataPointGenerator:
                 profile_id=profile.profile_id,
                 schema_datapoints=schema_points,
                 business_datapoints=business_points,
+                query_datapoints=query_points,
             )
         )
         self._attach_connection_metadata(result, str(profile.connection_id))
@@ -101,7 +112,7 @@ class DataPointGenerator:
     def _attach_connection_metadata(
         generated: GeneratedDataPoints, connection_id: str
     ) -> None:
-        for item in [*generated.schema_datapoints, *generated.business_datapoints]:
+        for item in generated.all_items():
             payload = item.datapoint
             if not isinstance(payload, dict):
                 continue
@@ -826,6 +837,375 @@ class DataPointGenerator:
         scored.sort(reverse=True)
         return scored[0][1]
 
+    @staticmethod
+    def _is_identifier_like(column_name: str) -> bool:
+        normalized = column_name.lower()
+        return (
+            normalized == "id"
+            or normalized.endswith("_id")
+            or normalized.endswith("uuid")
+            or normalized.endswith("_key")
+        )
+
+    @staticmethod
+    def _dimension_priority(column: ColumnProfile) -> tuple[int, int]:
+        name = column.name.lower()
+        score = 0
+        if any(token in name for token in ("segment", "category", "region", "store", "channel", "status", "type")):
+            score += 5
+        if any(token in name for token in ("customer", "account", "product", "supplier", "team")):
+            score += 3
+        distinct = column.distinct_count if isinstance(column.distinct_count, int) else 0
+        return (score, -distinct)
+
+    def _select_dimension_column(self, columns: list[ColumnProfile]) -> ColumnProfile | None:
+        candidates = [
+            col
+            for col in columns
+            if not self._is_numeric_data_type(col.data_type)
+            and not self._is_temporal_data_type(col.data_type)
+            and not self._is_identifier_like(col.name)
+        ]
+        if not candidates:
+            return None
+        return sorted(candidates, key=self._dimension_priority, reverse=True)[0]
+
+    @staticmethod
+    def _time_priority(column: ColumnProfile) -> tuple[int, int]:
+        name = column.name.lower()
+        score = 0
+        if "created" in name:
+            score += 5
+        if "date" in name:
+            score += 4
+        if "time" in name or "timestamp" in name:
+            score += 3
+        distinct = column.distinct_count if isinstance(column.distinct_count, int) else 0
+        return (score, distinct)
+
+    def _select_time_column(self, columns: list[ColumnProfile]) -> ColumnProfile | None:
+        candidates = [col for col in columns if self._is_temporal_data_type(col.data_type)]
+        if not candidates:
+            return None
+        return sorted(candidates, key=self._time_priority, reverse=True)[0]
+
+    def _generate_query_datapoints(self, table: TableProfile) -> list[GeneratedDataPoint]:
+        table_key = f"{table.schema_name}.{table.name}"
+        numeric_columns = [
+            col
+            for col in table.columns
+            if self._is_numeric_type(col.data_type) and not self._is_identifier_like(col.name)
+        ]
+        time_column = self._select_time_column(table.columns)
+        dimension_column = self._select_dimension_column(table.columns)
+
+        query_points: list[GeneratedDataPoint] = []
+        if numeric_columns and dimension_column:
+            query_points.append(
+                self._build_top_n_query_datapoint(
+                    table=table,
+                    dimension_column=dimension_column,
+                    measure_column=numeric_columns[0],
+                )
+            )
+        if numeric_columns and time_column:
+            query_points.append(
+                self._build_weekly_trend_query_datapoint(
+                    table=table,
+                    time_column=time_column,
+                    measure_column=numeric_columns[0],
+                    dimension_column=dimension_column,
+                )
+            )
+
+        flow_query = self._build_net_flow_query_datapoint(
+            table=table,
+            time_column=time_column,
+            dimension_column=dimension_column,
+        )
+        if flow_query is not None:
+            query_points.append(flow_query)
+
+        deduped: dict[str, GeneratedDataPoint] = {}
+        for item in query_points:
+            datapoint_id = str(item.datapoint.get("datapoint_id") or "")
+            if datapoint_id and datapoint_id not in deduped:
+                deduped[datapoint_id] = item
+        return list(deduped.values())
+
+    def _build_query_metadata(
+        self,
+        table: TableProfile,
+        *,
+        query_family: str,
+        primary_dimension: str | None,
+        primary_measure: str | None,
+        time_grain: str | None = None,
+    ) -> dict[str, object]:
+        metadata = self._contract_metadata(
+            table,
+            source="auto-profiler-query-template",
+            grain="query-level",
+            freshness="unknown",
+        )
+        metadata.update(
+            {
+                "query_family": query_family,
+                "primary_dimension": primary_dimension,
+                "primary_measure": primary_measure,
+                "time_grain": time_grain,
+            }
+        )
+        return metadata
+
+    def _build_top_n_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        dimension_column: ColumnProfile,
+        measure_column: ColumnProfile,
+    ) -> GeneratedDataPoint:
+        table_key = f"{table.schema_name}.{table.name}"
+        measure_name = self._title_case(measure_column.name)
+        dimension_name = self._title_case(dimension_column.name)
+        measure_alias = f"total_{self._slugify(measure_column.name)}"
+        sql_template = (
+            f"SELECT {dimension_column.name}, SUM({measure_column.name}) AS {measure_alias} "
+            f"FROM {table_key} "
+            f"GROUP BY 1 "
+            f"ORDER BY {measure_alias} DESC "
+            f"LIMIT {{top_n}}"
+        )
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, f"top_{dimension_column.name}_{measure_column.name}"),
+            name=f"Top {dimension_name} by {measure_name}",
+            sql_template=sql_template,
+            parameters={
+                "top_n": QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=10,
+                    description="Number of ranked rows to return.",
+                )
+            },
+            description=(
+                f"Ranks {dimension_name.lower()} values by summed {measure_name.lower()} in "
+                f"{table_key}."
+            ),
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                "ranking",
+                "top_n",
+                self._slugify(dimension_column.name),
+                self._slugify(measure_column.name),
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family="top_n_ranking",
+                primary_dimension=dimension_column.name,
+                primary_measure=measure_column.name,
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.72,
+            explanation="Deterministic top-N query template from profiled dimension and measure columns.",
+        )
+
+    def _build_weekly_trend_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        time_column: ColumnProfile,
+        measure_column: ColumnProfile,
+        dimension_column: ColumnProfile | None,
+    ) -> GeneratedDataPoint:
+        table_key = f"{table.schema_name}.{table.name}"
+        measure_slug = self._slugify(measure_column.name)
+        measure_name = self._title_case(measure_column.name)
+        group_dimension = ""
+        description_suffix = ""
+        if dimension_column is not None:
+            group_dimension = f", {dimension_column.name}"
+            description_suffix = f" by {self._title_case(dimension_column.name).lower()}"
+
+        postgres_template = (
+            f"SELECT DATE_TRUNC('week', {time_column.name}) AS week_start{group_dimension}, "
+            f"SUM({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL '{{lookback_weeks}} weeks' "
+            f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
+            f"ORDER BY 1 DESC"
+        )
+        mysql_variant = (
+            f"SELECT DATE_SUB(DATE({time_column.name}), INTERVAL WEEKDAY({time_column.name}) DAY) AS week_start{group_dimension}, "
+            f"SUM({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL {{lookback_weeks}} WEEK "
+            f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
+            f"ORDER BY 1 DESC"
+        )
+        clickhouse_variant = (
+            f"SELECT toStartOfWeek({time_column.name}) AS week_start{group_dimension}, "
+            f"sum({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= today() - INTERVAL {{lookback_weeks}} WEEK "
+            f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
+            f"ORDER BY 1 DESC"
+        )
+
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, f"weekly_{measure_column.name}_trend"),
+            name=f"Weekly {measure_name} Trend",
+            sql_template=postgres_template,
+            parameters={
+                "lookback_weeks": QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=8,
+                    description="Number of recent weeks to include.",
+                )
+            },
+            description=(
+                f"Shows weekly {measure_name.lower()} totals{description_suffix} for the last "
+                f"number of weeks in {table_key}."
+            ),
+            backend_variants={
+                "mysql": mysql_variant,
+                "clickhouse": clickhouse_variant,
+            },
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                "weekly",
+                "trend",
+                "time_series",
+                measure_slug,
+                *( [self._slugify(dimension_column.name)] if dimension_column is not None else [] ),
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family="weekly_trend",
+                primary_dimension=dimension_column.name if dimension_column is not None else None,
+                primary_measure=measure_column.name,
+                time_grain="week",
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.74,
+            explanation="Deterministic weekly trend template from profiled time and measure columns.",
+        )
+
+    def _build_net_flow_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        time_column: ColumnProfile | None,
+        dimension_column: ColumnProfile | None,
+    ) -> GeneratedDataPoint | None:
+        if time_column is None or dimension_column is None:
+            return None
+
+        deposits_column = None
+        withdrawals_column = None
+        for column in table.columns:
+            if not self._is_numeric_type(column.data_type):
+                continue
+            normalized = column.name.lower()
+            if deposits_column is None and any(token in normalized for token in ("deposit", "inflow", "credit")):
+                deposits_column = column
+            if withdrawals_column is None and any(token in normalized for token in ("withdraw", "outflow", "debit")):
+                withdrawals_column = column
+
+        if deposits_column is None or withdrawals_column is None:
+            return None
+
+        table_key = f"{table.schema_name}.{table.name}"
+        postgres_template = (
+            f"SELECT DATE_TRUNC('week', {time_column.name}) AS week_start, "
+            f"{dimension_column.name}, "
+            f"SUM({deposits_column.name}) AS total_deposits, "
+            f"SUM({withdrawals_column.name}) AS total_withdrawals, "
+            f"SUM({deposits_column.name}) - SUM({withdrawals_column.name}) AS net_flow "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL '{{lookback_weeks}} weeks' "
+            f"GROUP BY 1, 2 "
+            f"ORDER BY 1 DESC, net_flow DESC"
+        )
+        mysql_variant = (
+            f"SELECT DATE_SUB(DATE({time_column.name}), INTERVAL WEEKDAY({time_column.name}) DAY) AS week_start, "
+            f"{dimension_column.name}, "
+            f"SUM({deposits_column.name}) AS total_deposits, "
+            f"SUM({withdrawals_column.name}) AS total_withdrawals, "
+            f"SUM({deposits_column.name}) - SUM({withdrawals_column.name}) AS net_flow "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= CURRENT_DATE - INTERVAL {{lookback_weeks}} WEEK "
+            f"GROUP BY 1, 2 "
+            f"ORDER BY 1 DESC, net_flow DESC"
+        )
+        clickhouse_variant = (
+            f"SELECT toStartOfWeek({time_column.name}) AS week_start, "
+            f"{dimension_column.name}, "
+            f"sum({deposits_column.name}) AS total_deposits, "
+            f"sum({withdrawals_column.name}) AS total_withdrawals, "
+            f"sum({deposits_column.name}) - sum({withdrawals_column.name}) AS net_flow "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= today() - INTERVAL {{lookback_weeks}} WEEK "
+            f"GROUP BY 1, 2 "
+            f"ORDER BY 1 DESC, net_flow DESC"
+        )
+
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, "weekly_net_flow_by_dimension"),
+            name=f"Weekly Deposits, Withdrawals, and Net Flow by {self._title_case(dimension_column.name)}",
+            sql_template=postgres_template,
+            parameters={
+                "lookback_weeks": QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=8,
+                    description="Number of recent weeks to include.",
+                )
+            },
+            description=(
+                f"Shows total deposits, withdrawals, and net flow by "
+                f"{self._title_case(dimension_column.name).lower()} for recent weeks."
+            ),
+            backend_variants={
+                "mysql": mysql_variant,
+                "clickhouse": clickhouse_variant,
+            },
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                "net_flow",
+                "deposits",
+                "withdrawals",
+                "weekly",
+                self._slugify(dimension_column.name),
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family="net_flow",
+                primary_dimension=dimension_column.name,
+                primary_measure=f"{deposits_column.name},{withdrawals_column.name}",
+                time_grain="week",
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.8,
+            explanation="Heuristic net-flow template generated from paired deposit and withdrawal measures.",
+        )
+
     def _derive_table_purpose(self, table: TableProfile) -> str:
         column_names = [col.name for col in table.columns[:5]]
         hints = ""
@@ -865,6 +1245,10 @@ class DataPointGenerator:
     def _make_metric_id(self, table: str, metric_name: str) -> str:
         slug = self._slugify(f"{table}_{metric_name}")
         return f"metric_{slug}"
+
+    def _make_query_id(self, table: str, query_name: str) -> str:
+        slug = self._slugify(f"{table}_{query_name}")
+        return f"query_{slug}"
 
     @staticmethod
     def _title_case(value: str) -> str:
@@ -935,10 +1319,21 @@ class DataPointGenerator:
             if not existing or item.confidence >= existing.confidence:
                 business_map[key] = item
 
+        query_map: dict[str, GeneratedDataPoint] = {}
+        for item in generated.query_datapoints:
+            datapoint = item.datapoint or {}
+            datapoint_id = str(datapoint.get("datapoint_id") or "")
+            if not datapoint_id:
+                continue
+            existing = query_map.get(datapoint_id)
+            if not existing or item.confidence >= existing.confidence:
+                query_map[datapoint_id] = item
+
         return GeneratedDataPoints(
             profile_id=generated.profile_id,
             schema_datapoints=list(schema_map.values()),
             business_datapoints=list(business_map.values()),
+            query_datapoints=list(query_map.values()),
         )
 
     def _build_metric_prompt(self, table: TableProfile, numeric_columns: list) -> str:
