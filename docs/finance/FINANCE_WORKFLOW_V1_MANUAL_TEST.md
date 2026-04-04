@@ -15,6 +15,14 @@ Confirm DataChat can produce decision-grade finance answers (summary + drivers +
 - target database reachable
 - optional system DB configured for registry/profiling features
 
+Seeded fintech coverage reference:
+
+- `bank_transactions`: `2025-09-01` through `2026-04-30`
+- `bank_fx_rates`: `2025-09-01` through `2026-04-30`
+- `bank_loan_payments`: `2025-01-15` through `2026-04-15`
+
+Use this when validating weekly and monthly prompts in February, March, and April 2026.
+
 ## Track A: Fast Local Validation (global scope)
 
 1. Seed fintech demo data:

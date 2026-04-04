@@ -1,6 +1,14 @@
 -- Fintech demo query pack (manual validation).
 -- Run with:
 -- psql "postgresql://postgres:@localhost:5432/datachat_fintech" -f scripts/fintech_demo_queries.sql
+--
+-- Seed coverage reference:
+-- - bank_transactions: 2025-09-01 through 2026-04-30
+-- - bank_fx_rates: 2025-09-01 through 2026-04-30
+-- - bank_loan_payments: 2025-01-15 through 2026-04-15
+--
+-- This pack is intended to validate recent weekly/monthly prompts in Feb-Apr 2026
+-- against real seeded data, not empty windows.
 
 -- 1) Data volume checks (sanity: should be in thousands for key tables)
 SELECT 'bank_customers' AS table_name, COUNT(*) AS row_count FROM public.bank_customers

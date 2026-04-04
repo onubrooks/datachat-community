@@ -4,6 +4,14 @@ Use this guide to get value quickly as an end user: load realistic fintech data,
 
 ## 1) Load the Fintech Demo Data
 
+Seeded date coverage after loading:
+
+- `bank_transactions`: `2025-09-01` through `2026-04-30`
+- `bank_fx_rates`: `2025-09-01` through `2026-04-30`
+- `bank_loan_payments`: `2025-01-15` through `2026-04-15`
+
+This means weekly and monthly prompts in February, March, and April 2026 should return real seeded results instead of empty date windows.
+
 ### Option A: if your fintech DB already exists
 
 ```bash

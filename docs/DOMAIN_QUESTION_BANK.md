@@ -32,6 +32,13 @@ Use this question bank to test DataChat in both:
 
 ## Fintech (20 advanced business questions)
 
+Seeded demo coverage note:
+
+- `bank_transactions` and `bank_fx_rates` run through `2026-04-30`
+- `bank_loan_payments` runs through `2026-04-15`
+
+So the weekly and monthly fintech prompts below should have real February, March, and April 2026 data after reseeding the fintech demo dataset.
+
 | # | Question | Expected Signal | Possible Answer Hint |
 |---|---|---|---|
 | 1 | What is the failed transaction rate by day for the last 30 days, and which txn types drive it? | Daily failed-rate time series plus breakdown by txn_type. | Failed statuses should include declined and reversed patterns. |
