@@ -2296,6 +2296,21 @@ class TestQueryDataPointTemplates:
 
         assert "INTERVAL '6 weeks'" in result
 
+    def test_fill_template_defaults_extracts_lookback_months_from_query(self, sql_agent):
+        sql = (
+            "SELECT DATE_TRUNC('month', created_at) AS month_start "
+            "FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '{lookback_months} months'"
+        )
+        params = {"lookback_months": {"type": "integer", "default": 6}}
+
+        result = sql_agent._fill_template_defaults(
+            sql,
+            params,
+            query="Show monthly orders for the last 9 months",
+        )
+
+        assert "INTERVAL '9 months'" in result
+
     def test_query_matches_template_by_name_overlap(self, sql_agent):
         """Matches when query shares words with template name."""
         query = "show top customers by revenue"

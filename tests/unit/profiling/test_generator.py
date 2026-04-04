@@ -52,6 +52,13 @@ def _sample_profile():
                 max_value="20.0",
             ),
             ColumnProfile(
+                name="customer_segment",
+                data_type="varchar",
+                nullable=False,
+                sample_values=["retail", "smb"],
+                distinct_count=4,
+            ),
+            ColumnProfile(
                 name="created_at",
                 data_type="timestamp",
                 nullable=False,
@@ -195,6 +202,12 @@ async def test_generates_query_datapoints_from_profile():
     assert query_dp["related_tables"] == ["public.orders"]
     assert query_dp["sql_template"]
 
+    query_ids = {item.datapoint["datapoint_id"] for item in generated.query_datapoints}
+    assert "query_public_orders_top_customer_segment_total_amount" in query_ids
+    assert "query_public_orders_avg_customer_segment_total_amount" in query_ids
+    assert "query_public_orders_share_customer_segment_total_amount" in query_ids
+    assert "query_public_orders_monthly_total_amount_trend" in query_ids
+
 
 @pytest.mark.asyncio
 async def test_generates_net_flow_query_datapoint_when_columns_exist():
@@ -218,6 +231,25 @@ async def test_generates_net_flow_query_datapoint_when_columns_exist():
     )
     assert "net_flow" in net_flow_dp["sql_template"].lower()
     assert "lookback_weeks" in net_flow_dp["parameters"]
+
+
+@pytest.mark.asyncio
+async def test_limits_measure_family_generation_to_top_candidates():
+    profile = _fintech_flow_profile()
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Segment flows", "columns": {"customer_segment": "Segment", "week_start": "Week", "deposit_amount": "Deposits", "withdrawal_amount": "Withdrawals", "fee_amount": "Fees"}}',
+            '{"public.segment_flows": {"metrics": []}}',
+        ]
+    )
+
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    ids = {item.datapoint["datapoint_id"] for item in generated.query_datapoints}
+    assert "query_public_segment_flows_monthly_deposit_amount_trend" in ids
+    assert "query_public_segment_flows_monthly_withdrawal_amount_trend" in ids
+    assert not any("fee_amount" in datapoint_id for datapoint_id in ids)
 
 
 @pytest.mark.asyncio

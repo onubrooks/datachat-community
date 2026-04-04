@@ -387,8 +387,58 @@ class TestEntityHandling:
         output = await context_agent(input)
 
         assert output.success is True
-        # Entities are passed in input but not currently used for retrieval
-        # Future enhancement: use entities for metadata filtering
+        mock_retriever.retrieve.assert_called_once()
+        kwargs = mock_retriever.retrieve.await_args.kwargs
+        assert "Entity hints:" in kwargs["query"]
+        assert "revenue" in kwargs["query"]
+
+    @pytest.mark.asyncio
+    async def test_entity_boosting_reorders_matching_datapoints(self, context_agent, mock_retriever):
+        mock_retriever.retrieve.return_value = RetrievalResult(
+            items=[
+                RetrievedItem(
+                    datapoint_id="table_sales_001",
+                    score=0.2,
+                    source="hybrid",
+                    metadata={"type": "Schema", "name": "Sales Table"},
+                    content="sales facts",
+                ),
+                RetrievedItem(
+                    datapoint_id="query_customer_segment_deposits_001",
+                    score=0.18,
+                    source="hybrid",
+                    metadata={
+                        "type": "Query",
+                        "name": "Top Customer Segment by Deposits",
+                        "query_description": "Ranks customer segment values by deposit totals",
+                        "tags": "customer_segment,deposits,top_n",
+                    },
+                    content="customer segment deposit ranking",
+                ),
+            ],
+            total_count=2,
+            mode=RetrievalMode.HYBRID,
+            query="top segments",
+            trace={},
+        )
+
+        input = ContextAgentInput(
+            query="show top 5 customer segments by deposits",
+            entities=[
+                ExtractedEntity(entity_type="metric", value="deposits", confidence=0.95),
+                ExtractedEntity(entity_type="column", value="customer segment", confidence=0.9),
+            ],
+            max_datapoints=5,
+        )
+
+        output = await context_agent(input)
+
+        assert output.success is True
+        assert output.investigation_memory.datapoints[0].datapoint_id == (
+            "query_customer_segment_deposits_001"
+        )
+        trace = output.data["retrieval_trace"]["entity_boosting"]
+        assert trace["matched_items"]
 
     @pytest.mark.asyncio
     async def test_works_without_entities(
