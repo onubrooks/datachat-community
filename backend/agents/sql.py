@@ -415,6 +415,11 @@ class SQLAgent(BaseAgent):
             runtime_stats["finance_net_flow_template"] = True
             return self._apply_row_limit_policy(finance_flow_sql, input.query)
 
+        grocery_stockout_sql = self._build_grocery_stockout_risk_template(input)
+        if grocery_stockout_sql:
+            runtime_stats["grocery_stockout_risk_template"] = True
+            return self._apply_row_limit_policy(grocery_stockout_sql, input.query)
+
         prompt, compiler_plan = await self._build_generation_prompt(
             input,
             runtime_stats=runtime_stats,
@@ -3242,6 +3247,107 @@ class SQLAgent(BaseAgent):
             clarifying_questions=[],
         )
 
+    def _build_grocery_stockout_risk_template(self, input: SQLAgentInput) -> GeneratedSQL | None:
+        """Return deterministic SQL for grocery stockout-risk ranking."""
+        query = (input.query or "").lower()
+        if not ("stockout" in query and "risk" in query):
+            return None
+        if not any(token in query for token in ("sku", "skus", "product", "products", "inventory")):
+            return None
+
+        table_name_map = self._collect_available_table_names(input)
+
+        def _resolve_table(required: str) -> str | None:
+            return next(
+                (
+                    table_name
+                    for key, table_name in table_name_map.items()
+                    if key == required or key.endswith(f".{required}")
+                ),
+                None,
+            )
+
+        snapshots_table_name = _resolve_table("grocery_inventory_snapshots")
+        products_table_name = _resolve_table("grocery_products")
+        if not snapshots_table_name or not products_table_name:
+            return None
+
+        db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
+        if db_type != "postgresql":
+            return None
+
+        snapshots_table = self.catalog.format_table_reference(snapshots_table_name, db_type=db_type)
+        products_table = self.catalog.format_table_reference(products_table_name, db_type=db_type)
+        if not snapshots_table or not products_table:
+            return None
+
+        top_n = self._extract_template_parameter_value(
+            query_lower=query,
+            param_name="top_n",
+            param_def={"type": "integer", "default": 5},
+        )
+        if not isinstance(top_n, int) or top_n <= 0:
+            top_n = 5
+
+        sql = (
+            "WITH anchor AS ("
+            f" SELECT MAX(snapshot_date) AS max_snapshot_date FROM {snapshots_table}"
+            "), latest_weekly_snapshots AS ("
+            " SELECT"
+            "   s.product_id,"
+            "   s.store_id,"
+            "   s.on_hand_qty,"
+            "   s.reserved_qty,"
+            "   s.snapshot_date,"
+            "   ROW_NUMBER() OVER ("
+            "     PARTITION BY s.product_id, s.store_id"
+            "     ORDER BY s.snapshot_date DESC"
+            "   ) AS rn"
+            f" FROM {snapshots_table} s"
+            " CROSS JOIN anchor a"
+            " WHERE s.snapshot_date >= a.max_snapshot_date - INTERVAL '7 days'"
+            "), stock_levels AS ("
+            " SELECT"
+            "   lws.product_id,"
+            "   lws.store_id,"
+            "   gp.sku,"
+            "   gp.product_name,"
+            "   (lws.on_hand_qty - lws.reserved_qty) AS available_qty,"
+            "   gp.reorder_level,"
+            "   (lws.on_hand_qty - lws.reserved_qty) - gp.reorder_level AS stockout_risk_score,"
+            "   lws.snapshot_date"
+            " FROM latest_weekly_snapshots lws"
+            f" JOIN {products_table} gp ON lws.product_id = gp.product_id"
+            " WHERE lws.rn = 1"
+            ")"
+            " SELECT"
+            "   product_id,"
+            "   store_id,"
+            "   sku,"
+            "   product_name,"
+            "   available_qty,"
+            "   reorder_level,"
+            "   stockout_risk_score,"
+            "   snapshot_date"
+            " FROM stock_levels"
+            " ORDER BY stockout_risk_score ASC, product_id, store_id"
+            f" LIMIT {top_n}"
+        )
+        return GeneratedSQL(
+            sql=sql,
+            explanation=(
+                "Ranked SKUs by stockout risk using the latest weekly inventory snapshots, "
+                "available quantity, and reorder level."
+            ),
+            used_datapoints=[],
+            confidence=0.8,
+            assumptions=[
+                "Stockout risk is defined as available_qty minus reorder_level; lower values indicate higher risk.",
+                "Window anchors to the latest snapshot_date in grocery_inventory_snapshots.",
+            ],
+            clarifying_questions=[],
+        )
+
     def _collect_available_table_names(self, input: SQLAgentInput) -> dict[str, str]:
         table_map: dict[str, str] = {}
         for datapoint in getattr(input.investigation_memory, "datapoints", []) or []:
@@ -3839,6 +3945,37 @@ class SQLAgent(BaseAgent):
             score -= 3.5
         if query_mentions_withdrawal and template_is_account_balance and not template_has_withdrawal:
             score -= 3.5
+
+        query_mentions_stockout = any(
+            phrase in query_lower
+            for phrase in ("stockout", "out of stock", "inventory risk", "reorder risk")
+        )
+        query_mentions_inventory_signals = any(
+            phrase in query_lower
+            for phrase in ("on-hand", "on hand", "reserved", "reorder", "sku", "skus")
+        )
+        template_has_inventory_risk = any(
+            token in template_text
+            for token in (
+                "stockout",
+                "inventory risk",
+                "reorder",
+                "on hand",
+                "on_hand",
+                "reserved",
+                "sku",
+                "inventory_snapshot",
+            )
+        )
+        template_is_sales_focused = any(
+            token in template_text for token in ("revenue", "sales", "gross margin", "discount")
+        )
+        if query_mentions_stockout and template_has_inventory_risk:
+            score += 3.0
+        if query_mentions_inventory_signals and template_has_inventory_risk:
+            score += 2.0
+        if query_mentions_stockout and template_is_sales_focused and not template_has_inventory_risk:
+            score -= 3.0
 
         return score
 

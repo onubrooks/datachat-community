@@ -392,6 +392,21 @@ class ContextAgent(BaseAgent):
             aliases.update({"segment", "segments", "customer segment", "customer segments"})
         if "net flow" in normalized:
             aliases.update({"net flow", "cash flow", "inflow minus outflow"})
+        if "stockout" in normalized or "out of stock" in normalized:
+            aliases.update(
+                {
+                    "stockout",
+                    "out of stock",
+                    "inventory risk",
+                    "reorder",
+                    "on hand",
+                    "reserved",
+                }
+            )
+        if "inventory" in normalized:
+            aliases.update({"stock", "on hand", "reserved", "reorder", "snapshot"})
+        if normalized in {"sku", "skus"}:
+            aliases.update({"sku", "skus", "product", "products", "item", "items"})
 
         aliases.discard(normalized)
         return sorted(aliases)

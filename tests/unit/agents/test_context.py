@@ -455,6 +455,22 @@ class TestEntityHandling:
         assert "customer segment" in values
         assert "segment" in values
 
+    def test_extract_entity_hints_expands_grocery_aliases(self, context_agent):
+        entities = [
+            ExtractedEntity(entity_type="metric", value="stockout risk", confidence=0.92),
+            ExtractedEntity(entity_type="column", value="sku", confidence=0.88),
+        ]
+
+        hints = context_agent._extract_entity_hints(entities)
+        values = {hint["value"] for hint in hints}
+
+        assert "stockout risk" in values
+        assert "out of stock" in values
+        assert "reorder" in values
+        assert "reserved" in values
+        assert "sku" in values
+        assert "product" in values
+
     @pytest.mark.asyncio
     async def test_works_without_entities(
         self, context_agent, mock_retriever, sample_retrieval_result

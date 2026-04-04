@@ -2054,6 +2054,53 @@ class TestErrorHandling:
         assert output.metadata.llm_calls == 0
 
     @pytest.mark.asyncio
+    async def test_uses_grocery_stockout_risk_template(self, sql_agent):
+        memory = InvestigationMemory(
+            query="seed",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="table_grocery_inventory_snapshots_001",
+                    datapoint_type="Schema",
+                    name="Grocery Inventory Snapshots",
+                    score=0.95,
+                    source="hybrid",
+                    metadata={
+                        "table_name": "public.grocery_inventory_snapshots",
+                        "key_columns": [],
+                    },
+                ),
+                RetrievedDataPoint(
+                    datapoint_id="table_grocery_products_001",
+                    datapoint_type="Schema",
+                    name="Grocery Products",
+                    score=0.94,
+                    source="hybrid",
+                    metadata={
+                        "table_name": "public.grocery_products",
+                        "key_columns": [],
+                    },
+                ),
+            ],
+            total_retrieved=2,
+            retrieval_mode="hybrid",
+            sources_used=[],
+        )
+        sql_input = SQLAgentInput(
+            query="Which 5 SKUs have the highest stockout risk this week based on on-hand, reserved, and reorder level?",
+            investigation_memory=memory,
+            database_type="postgresql",
+        )
+
+        output = await sql_agent(sql_input)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "latest_weekly_snapshots" in output.generated_sql.sql
+        assert "stockout_risk_score" in output.generated_sql.sql
+        assert "LIMIT 5" in output.generated_sql.sql
+        assert output.metadata.llm_calls == 0
+
+    @pytest.mark.asyncio
     async def test_uses_finance_loan_default_rate_template_with_relationship_hints(
         self, sql_agent
     ):
@@ -2482,6 +2529,22 @@ class TestQueryDataPointTemplates:
         )
 
         assert deposit_score > balance_score
+
+    def test_query_template_match_score_prefers_inventory_risk_template(self, sql_agent):
+        inventory_score = sql_agent._query_template_match_score(
+            query_lower="which 5 skus have the highest stockout risk this week based on on-hand, reserved, and reorder level",
+            name_lower="weekly stockout risk by sku",
+            description_lower="shows stockout risk using on hand, reserved, and reorder levels",
+            tags=["stockout", "inventory", "sku", "reorder", "reserved"],
+        )
+        sales_score = sql_agent._query_template_match_score(
+            query_lower="which 5 skus have the highest stockout risk this week based on on-hand, reserved, and reorder level",
+            name_lower="top products by revenue",
+            description_lower="shows top products by sales revenue",
+            tags=["sales", "revenue", "product"],
+        )
+
+        assert inventory_score > sales_score
 
     @pytest.mark.asyncio
     async def test_generate_sql_uses_query_datapoint_template(self, sql_agent):

@@ -1,0 +1,35 @@
+[
+  {
+    "query": "Which 5 SKUs have the highest stockout risk this week based on on-hand, reserved, and reorder level?",
+    "expected_sql_contains": [
+      "grocery_inventory_snapshots",
+      "grocery_products",
+      "on_hand_qty",
+      "reserved_qty",
+      "reorder_level",
+      "stockout_risk_score",
+      "limit 5"
+    ],
+    "expected_answer_type": "table"
+  },
+  {
+    "query": "Which products fell below reorder level most frequently in the last 30 days?",
+    "expected_sql_contains": [
+      "grocery_inventory_snapshots",
+      "reorder_level",
+      "snapshot_date",
+      "group by"
+    ],
+    "expected_answer_type": "table"
+  },
+  {
+    "query": "What is inventory turnover by category and store for the last 60 days?",
+    "expected_sql_contains": [
+      "inventory",
+      "category",
+      "store",
+      "group by"
+    ],
+    "expected_answer_type": "table"
+  }
+]
