@@ -2054,6 +2054,53 @@ class TestErrorHandling:
         assert output.metadata.llm_calls == 0
 
     @pytest.mark.asyncio
+    async def test_uses_grocery_stockout_risk_template(self, sql_agent):
+        memory = InvestigationMemory(
+            query="seed",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="table_grocery_inventory_snapshots_001",
+                    datapoint_type="Schema",
+                    name="Grocery Inventory Snapshots",
+                    score=0.95,
+                    source="hybrid",
+                    metadata={
+                        "table_name": "public.grocery_inventory_snapshots",
+                        "key_columns": [],
+                    },
+                ),
+                RetrievedDataPoint(
+                    datapoint_id="table_grocery_products_001",
+                    datapoint_type="Schema",
+                    name="Grocery Products",
+                    score=0.94,
+                    source="hybrid",
+                    metadata={
+                        "table_name": "public.grocery_products",
+                        "key_columns": [],
+                    },
+                ),
+            ],
+            total_retrieved=2,
+            retrieval_mode="hybrid",
+            sources_used=[],
+        )
+        sql_input = SQLAgentInput(
+            query="Which 5 SKUs have the highest stockout risk this week based on on-hand, reserved, and reorder level?",
+            investigation_memory=memory,
+            database_type="postgresql",
+        )
+
+        output = await sql_agent(sql_input)
+
+        assert output.success is True
+        assert output.needs_clarification is False
+        assert "latest_weekly_snapshots" in output.generated_sql.sql
+        assert "stockout_risk_score" in output.generated_sql.sql
+        assert "LIMIT 5" in output.generated_sql.sql
+        assert output.metadata.llm_calls == 0
+
+    @pytest.mark.asyncio
     async def test_uses_finance_loan_default_rate_template_with_relationship_hints(
         self, sql_agent
     ):
@@ -2269,6 +2316,48 @@ class TestQueryDataPointTemplates:
 
         assert result == "SELECT * FROM users LIMIT 5"
 
+    def test_fill_template_defaults_extracts_top_n_from_query(self, sql_agent):
+        sql = "SELECT customer_id FROM orders ORDER BY revenue DESC LIMIT {top_n}"
+        params = {"top_n": {"type": "integer", "default": 10}}
+
+        result = sql_agent._fill_template_defaults(
+            sql,
+            params,
+            query="Show top 3 customers by revenue",
+        )
+
+        assert result == "SELECT customer_id FROM orders ORDER BY revenue DESC LIMIT 3"
+
+    def test_fill_template_defaults_extracts_lookback_weeks_from_query(self, sql_agent):
+        sql = (
+            "SELECT DATE_TRUNC('week', created_at) AS week_start "
+            "FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '{lookback_weeks} weeks'"
+        )
+        params = {"lookback_weeks": {"type": "integer", "default": 8}}
+
+        result = sql_agent._fill_template_defaults(
+            sql,
+            params,
+            query="Show orders for the last 6 weeks",
+        )
+
+        assert "INTERVAL '6 weeks'" in result
+
+    def test_fill_template_defaults_extracts_lookback_months_from_query(self, sql_agent):
+        sql = (
+            "SELECT DATE_TRUNC('month', created_at) AS month_start "
+            "FROM orders WHERE created_at >= CURRENT_DATE - INTERVAL '{lookback_months} months'"
+        )
+        params = {"lookback_months": {"type": "integer", "default": 6}}
+
+        result = sql_agent._fill_template_defaults(
+            sql,
+            params,
+            query="Show monthly orders for the last 9 months",
+        )
+
+        assert "INTERVAL '9 months'" in result
+
     def test_query_matches_template_by_name_overlap(self, sql_agent):
         """Matches when query shares words with template name."""
         query = "show top customers by revenue"
@@ -2351,6 +2440,111 @@ class TestQueryDataPointTemplates:
         assert result is not None
         assert result.used_datapoints == ["query_wow_decline_001"]
         assert "LIMIT 2" in result.sql
+
+    def test_try_query_datapoint_template_prefers_deposit_trend_over_generic_balance(
+        self, sql_agent
+    ):
+        memory = InvestigationMemory(
+            query="Show weekly deposit trend for the last 6 weeks from the last deposit date",
+            datapoints=[
+                RetrievedDataPoint(
+                    datapoint_id="query_weekly_balance_001",
+                    datapoint_type="Query",
+                    name="Weekly Current Balance Trend",
+                    score=0.93,
+                    source="vector",
+                    metadata={
+                        "sql_template": (
+                            "SELECT DATE_TRUNC('week', opened_at) AS week_start, "
+                            "SUM(current_balance) AS total_current_balance "
+                            "FROM public.bank_accounts "
+                            "WHERE opened_at >= CURRENT_DATE - INTERVAL '{lookback_weeks} weeks' "
+                            "GROUP BY 1 ORDER BY 1 DESC"
+                        ),
+                        "query_description": "Shows weekly current balance totals from account opening dates.",
+                        "parameters": json.dumps(
+                            {"lookback_weeks": {"type": "integer", "default": 8}}
+                        ),
+                        "tags": "weekly,trend,balance,accounts",
+                    },
+                ),
+                RetrievedDataPoint(
+                    datapoint_id="query_weekly_deposit_001",
+                    datapoint_type="Query",
+                    name="Weekly Deposit Trend from Latest Deposit Date",
+                    score=0.9,
+                    source="vector",
+                    metadata={
+                        "sql_template": (
+                            "WITH anchor AS ("
+                            "SELECT MAX(business_date) AS anchor_date "
+                            "FROM public.bank_transactions WHERE direction = 'credit'"
+                            ") "
+                            "SELECT DATE_TRUNC('week', business_date) AS week_start, "
+                            "SUM(amount) AS total_deposit_amount "
+                            "FROM public.bank_transactions "
+                            "WHERE direction = 'credit' "
+                            "AND business_date >= COALESCE((SELECT anchor_date FROM anchor), CURRENT_DATE) "
+                            "- INTERVAL '{lookback_weeks} weeks' "
+                            "GROUP BY 1 ORDER BY 1 DESC"
+                        ),
+                        "query_description": (
+                            "Shows weekly deposit totals from the latest deposit date."
+                        ),
+                        "parameters": json.dumps(
+                            {"lookback_weeks": {"type": "integer", "default": 8}}
+                        ),
+                        "tags": "weekly,trend,deposit,credit,latest_date_anchor",
+                    },
+                ),
+            ],
+            total_retrieved=2,
+            retrieval_mode="hybrid",
+            sources_used=["query_weekly_balance_001", "query_weekly_deposit_001"],
+        )
+        sql_input = SQLAgentInput(
+            query="Show weekly deposit trend for the last 6 weeks from the last deposit date",
+            investigation_memory=memory,
+        )
+
+        result = sql_agent._try_query_datapoint_template(sql_input)
+
+        assert result is not None
+        assert result.used_datapoints == ["query_weekly_deposit_001"]
+        assert "direction = 'credit'" in result.sql
+        assert "INTERVAL '6 weeks'" in result.sql
+
+    def test_query_template_match_score_penalizes_balance_for_deposit_prompt(self, sql_agent):
+        deposit_score = sql_agent._query_template_match_score(
+            query_lower="show weekly deposit trend for the last 6 weeks from the last deposit date",
+            name_lower="weekly deposit trend from latest deposit date",
+            description_lower="shows weekly deposit totals from the latest deposit date",
+            tags=["weekly", "trend", "deposit", "credit", "latest_date_anchor"],
+        )
+        balance_score = sql_agent._query_template_match_score(
+            query_lower="show weekly deposit trend for the last 6 weeks from the last deposit date",
+            name_lower="weekly current balance trend",
+            description_lower="shows weekly current balance totals from account opening dates",
+            tags=["weekly", "trend", "balance", "accounts"],
+        )
+
+        assert deposit_score > balance_score
+
+    def test_query_template_match_score_prefers_inventory_risk_template(self, sql_agent):
+        inventory_score = sql_agent._query_template_match_score(
+            query_lower="which 5 skus have the highest stockout risk this week based on on-hand, reserved, and reorder level",
+            name_lower="weekly stockout risk by sku",
+            description_lower="shows stockout risk using on hand, reserved, and reorder levels",
+            tags=["stockout", "inventory", "sku", "reorder", "reserved"],
+        )
+        sales_score = sql_agent._query_template_match_score(
+            query_lower="which 5 skus have the highest stockout risk this week based on on-hand, reserved, and reorder level",
+            name_lower="top products by revenue",
+            description_lower="shows top products by sales revenue",
+            tags=["sales", "revenue", "product"],
+        )
+
+        assert inventory_score > sales_score
 
     @pytest.mark.asyncio
     async def test_generate_sql_uses_query_datapoint_template(self, sql_agent):

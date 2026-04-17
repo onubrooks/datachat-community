@@ -13,9 +13,11 @@ The ContextAgent:
 """
 
 import logging
+import re
 from typing import Any
 
 from backend.agents.base import BaseAgent
+from backend.domain_packs import DOMAIN_PACKS
 from backend.knowledge.retriever import RetrievalMode, RetrievalResult, RetrievedItem, Retriever
 from backend.models.agent import (
     AgentMetadata,
@@ -91,17 +93,19 @@ class ContextAgent(BaseAgent):
                 candidate_filter = input.context.get("retrieval_metadata_filter")
                 if isinstance(candidate_filter, dict) and candidate_filter:
                     metadata_filter = candidate_filter
+            entity_hints = self._extract_entity_hints(input.entities)
+            retrieval_query = self._build_entity_aware_query(input.query, entity_hints)
 
             # Perform retrieval
             result = await self.retriever.retrieve(
-                query=input.query,
+                query=retrieval_query,
                 mode=mode,
                 top_k=input.max_datapoints,
                 metadata_filter=metadata_filter,
             )
             if metadata_filter and len(result.items) < input.max_datapoints:
                 unfiltered_result = await self.retriever.retrieve(
-                    query=input.query,
+                    query=retrieval_query,
                     mode=mode,
                     top_k=input.max_datapoints,
                     metadata_filter=None,
@@ -112,6 +116,8 @@ class ContextAgent(BaseAgent):
                     top_k=input.max_datapoints,
                     metadata_filter=metadata_filter,
                 )
+            if entity_hints:
+                result = self._apply_entity_boosting(result, entity_hints)
 
             # Convert retrieval results to RetrievedDataPoints
             datapoints = []
@@ -329,3 +335,197 @@ class ContextAgent(BaseAgent):
             query=primary.query,
             trace=merged_trace,
         )
+
+    @staticmethod
+    def _extract_entity_hints(entities: list[Any]) -> list[dict[str, Any]]:
+        hints: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for entity in entities or []:
+            entity_type = getattr(entity, "entity_type", None)
+            confidence = float(getattr(entity, "confidence", 0.0) or 0.0)
+            if not entity_type or confidence < 0.55:
+                continue
+            candidates = [
+                getattr(entity, "normalized_value", None),
+                getattr(entity, "value", None),
+            ]
+            for candidate in candidates:
+                value = str(candidate or "").strip().lower()
+                if not value:
+                    continue
+                key = (str(entity_type), value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                hints.append(
+                    {
+                        "entity_type": str(entity_type),
+                        "value": value,
+                        "confidence": confidence,
+                    }
+                )
+                for alias in ContextAgent._domain_aliases(value):
+                    alias_key = (str(entity_type), alias)
+                    if alias_key in seen:
+                        continue
+                    seen.add(alias_key)
+                    hints.append(
+                        {
+                            "entity_type": str(entity_type),
+                            "value": alias,
+                            "confidence": max(0.55, confidence - 0.05),
+                        }
+                    )
+        return hints
+
+    @staticmethod
+    def _domain_aliases(value: str) -> list[str]:
+        aliases: set[str] = set()
+        normalized = value.strip().lower()
+        if not normalized:
+            return []
+        for pack in DOMAIN_PACKS:
+            if pack.expand_aliases is None:
+                continue
+            aliases.update(pack.expand_aliases(normalized))
+        aliases.discard(normalized)
+        return sorted(aliases)
+
+    @staticmethod
+    def _build_entity_aware_query(query: str, entity_hints: list[dict[str, Any]]) -> str:
+        if not entity_hints:
+            return query
+        ranked_hints = sorted(
+            entity_hints,
+            key=lambda item: (item.get("confidence", 0.0), len(str(item.get("value", "")))),
+            reverse=True,
+        )
+        hint_terms: list[str] = []
+        for hint in ranked_hints:
+            value = str(hint.get("value", "")).strip()
+            if not value or value in query.lower():
+                continue
+            hint_terms.append(value)
+            if len(hint_terms) >= 6:
+                break
+        if not hint_terms:
+            return query
+        return f"{query}\nEntity hints: {'; '.join(hint_terms)}"
+
+    def _apply_entity_boosting(
+        self,
+        result: RetrievalResult,
+        entity_hints: list[dict[str, Any]],
+    ) -> RetrievalResult:
+        if not result.items or not entity_hints:
+            return result
+
+        boosted_payloads: list[tuple[float, int, RetrievedItem, list[dict[str, Any]]]] = []
+        for original_rank, item in enumerate(result.items):
+            matched_hints = self._match_item_to_entities(item, entity_hints)
+            boost = sum(match["boost"] for match in matched_hints)
+            boosted_score = min(1.0, item.score + boost)
+            boosted_item = item.model_copy(update={"score": boosted_score})
+            boosted_payloads.append((boosted_score, -original_rank, boosted_item, matched_hints))
+
+        boosted_payloads.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        boosted_items = [row[2] for row in boosted_payloads]
+        trace_matches = [
+            {
+                "datapoint_id": row[2].datapoint_id,
+                "boosted_score": row[0],
+                "matched_entities": row[3],
+            }
+            for row in boosted_payloads
+            if row[3]
+        ]
+
+        trace = dict(result.trace or {})
+        trace["entity_boosting"] = {
+            "entity_hints": entity_hints,
+            "matched_items": trace_matches,
+        }
+        return RetrievalResult(
+            items=boosted_items,
+            total_count=len(boosted_items),
+            mode=result.mode,
+            query=result.query,
+            trace=trace,
+        )
+
+    def _match_item_to_entities(
+        self,
+        item: RetrievedItem,
+        entity_hints: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        searchable_segments: list[str] = [
+            item.datapoint_id,
+            str(metadata.get("name", "")),
+            str(metadata.get("table_name", "")),
+            str(metadata.get("schema", "")),
+            str(metadata.get("query_description", "")),
+            str(metadata.get("business_purpose", "")),
+            str(metadata.get("calculation", "")),
+            item.content or "",
+        ]
+        for list_key in ("related_tables", "tags", "synonyms", "common_queries"):
+            searchable_segments.extend(self._coerce_metadata_strings(metadata.get(list_key)))
+        searchable_text = " ".join(part.lower() for part in searchable_segments if part)
+
+        matches: list[dict[str, Any]] = []
+        for hint in entity_hints:
+            value = str(hint.get("value", "")).strip().lower()
+            if not value:
+                continue
+            if not self._contains_term(searchable_text, value):
+                continue
+            entity_type = str(hint.get("entity_type", "other"))
+            base_boost = {
+                "table": 0.09,
+                "metric": 0.08,
+                "column": 0.06,
+                "filter": 0.05,
+                "time_reference": 0.04,
+                "other": 0.03,
+            }.get(entity_type, 0.03)
+            confidence = float(hint.get("confidence", 0.0) or 0.0)
+            boost = base_boost * max(0.5, min(confidence, 1.0))
+            matches.append(
+                {
+                    "entity_type": entity_type,
+                    "value": value,
+                    "confidence": confidence,
+                    "boost": round(boost, 4),
+                }
+            )
+        return matches
+
+    @staticmethod
+    def _coerce_metadata_strings(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("["):
+                try:
+                    import json
+
+                    decoded = json.loads(stripped)
+                except Exception:  # noqa: BLE001
+                    decoded = None
+                if isinstance(decoded, list):
+                    return [str(item) for item in decoded if str(item).strip()]
+            if "," in stripped:
+                return [part.strip() for part in stripped.split(",") if part.strip()]
+            return [stripped]
+        return []
+
+    @staticmethod
+    def _contains_term(searchable_text: str, value: str) -> bool:
+        if value in searchable_text:
+            return True
+        normalized = re.escape(value)
+        return bool(re.search(rf"\b{normalized}\b", searchable_text))

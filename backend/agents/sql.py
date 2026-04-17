@@ -28,6 +28,7 @@ from backend.models.agent import (
     SQLGenerationError,
     ValidationIssue,
 )
+from backend.domain_packs import DOMAIN_PACKS
 from backend.profiling.cache import load_profile_cache
 from backend.prompts.loader import PromptLoader
 
@@ -405,15 +406,11 @@ class SQLAgent(BaseAgent):
             runtime_stats["query_datapoint_template"] = True
             return self._apply_row_limit_policy(query_dp_sql, input.query)
 
-        finance_loan_default_sql = self._build_finance_loan_default_rate_template(input)
-        if finance_loan_default_sql:
-            runtime_stats["finance_loan_default_rate_template"] = True
-            return self._apply_row_limit_policy(finance_loan_default_sql, input.query)
-
-        finance_flow_sql = self._build_finance_net_flow_template(input)
-        if finance_flow_sql:
-            runtime_stats["finance_net_flow_template"] = True
-            return self._apply_row_limit_policy(finance_flow_sql, input.query)
+        domain_template_result = self._try_domain_pack_templates(input)
+        if domain_template_result is not None:
+            builder_key, generated = domain_template_result
+            runtime_stats[f"domain_pack_{builder_key}"] = True
+            return self._apply_row_limit_policy(generated, input.query)
 
         prompt, compiler_plan = await self._build_generation_prompt(
             input,
@@ -3065,182 +3062,15 @@ class SQLAgent(BaseAgent):
         logger.debug(f"LLM response content: {normalized_content}")
         raise ValueError("Failed to parse LLM response: Response missing 'sql' field")
 
-    def _build_finance_net_flow_template(self, input: SQLAgentInput) -> GeneratedSQL | None:
-        """Return deterministic SQL for weekly deposits/withdrawals/net-flow by segment."""
-        query = (input.query or "").lower()
-        required_signals = ("deposit", "withdraw", "net flow", "segment", "week")
-        if not all(signal in query for signal in required_signals):
-            return None
-
-        table_name_map = self._collect_available_table_names(input)
-        required_tables = ("bank_transactions", "bank_accounts", "bank_customers")
-        resolved: dict[str, str] = {}
-        for required in required_tables:
-            matched = next(
-                (
-                    table_name
-                    for key, table_name in table_name_map.items()
-                    if key == required or key.endswith(f".{required}")
-                ),
-                None,
-            )
-            if not matched:
-                return None
-            resolved[required] = matched
-
-        db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
-        if db_type != "postgresql":
-            return None
-
-        transactions_table = self.catalog.format_table_reference(
-            resolved["bank_transactions"], db_type=db_type
-        )
-        accounts_table = self.catalog.format_table_reference(resolved["bank_accounts"], db_type=db_type)
-        customers_table = self.catalog.format_table_reference(
-            resolved["bank_customers"], db_type=db_type
-        )
-        if not transactions_table or not accounts_table or not customers_table:
-            return None
-
-        sql = (
-            "WITH anchor AS ("
-            f" SELECT MAX(t.business_date) AS max_business_date FROM {transactions_table} t"
-            " WHERE t.status = 'posted'"
-            "), weekly_segment_flow AS ("
-            " SELECT"
-            "   DATE_TRUNC('week', t.business_date)::date AS week_start,"
-            "   c.segment AS segment,"
-            "   SUM(CASE WHEN t.direction = 'credit' THEN t.amount ELSE 0 END) AS deposits,"
-            "   SUM(CASE WHEN t.direction = 'debit' THEN t.amount ELSE 0 END) AS withdrawals,"
-            "   SUM(CASE WHEN t.direction = 'credit' THEN t.amount ELSE -t.amount END) AS net_flow"
-            f" FROM {transactions_table} t"
-            f" JOIN {accounts_table} a ON a.account_id = t.account_id"
-            f" JOIN {customers_table} c ON c.customer_id = a.customer_id"
-            " CROSS JOIN anchor"
-            " WHERE t.status = 'posted'"
-            "   AND t.business_date >= (anchor.max_business_date - INTERVAL '7 weeks')"
-            " GROUP BY 1, 2"
-            "), with_wow AS ("
-            " SELECT"
-            "   week_start,"
-            "   segment,"
-            "   deposits,"
-            "   withdrawals,"
-            "   net_flow,"
-            "   net_flow - LAG(net_flow) OVER (PARTITION BY segment ORDER BY week_start)"
-            "     AS wow_net_flow_change"
-            " FROM weekly_segment_flow"
-            "), segment_decline AS ("
-            " SELECT"
-            "   segment,"
-            "   SUM(CASE WHEN wow_net_flow_change < 0 THEN wow_net_flow_change ELSE 0 END)"
-            "     AS total_wow_decline,"
-            "   ROW_NUMBER() OVER ("
-            "     ORDER BY SUM(CASE WHEN wow_net_flow_change < 0 THEN wow_net_flow_change ELSE 0 END)"
-            "   ) AS decline_rank"
-            " FROM with_wow"
-            " GROUP BY segment"
-            ")"
-            " SELECT"
-            "   w.week_start,"
-            "   w.segment,"
-            "   w.deposits,"
-            "   w.withdrawals,"
-            "   w.net_flow,"
-            "   w.wow_net_flow_change,"
-            "   (COALESCE(d.decline_rank, 999) <= 2) AS top_decline_driver"
-            " FROM with_wow w"
-            " LEFT JOIN segment_decline d ON d.segment = w.segment"
-            " ORDER BY w.week_start DESC, w.segment"
-        )
-        return GeneratedSQL(
-            sql=sql,
-            explanation=(
-                "Computed weekly deposits, withdrawals, and net flow by segment over the latest 8 weeks, "
-                "then flagged top 2 segments with largest cumulative week-over-week net-flow decline."
-            ),
-            used_datapoints=[],
-            confidence=0.78,
-            assumptions=[
-                "Deposits are inferred as transactions where direction = 'credit'.",
-                "Withdrawals are inferred as transactions where direction = 'debit'.",
-                "Window anchors to latest posted business_date in bank_transactions.",
-            ],
-            clarifying_questions=[],
-        )
-
-    def _build_finance_loan_default_rate_template(self, input: SQLAgentInput) -> GeneratedSQL | None:
-        """Return deterministic SQL for loan default rate aggregated by customer segment."""
-        query = (input.query or "").lower()
-        has_default_rate_intent = "default rate" in query or (
-            "default" in query and "rate" in query
-        )
-        if not (has_default_rate_intent and "loan" in query and "segment" in query):
-            return None
-
-        table_name_map = self._collect_available_table_names(input)
-
-        def _resolve_table(required: str) -> str | None:
-            return next(
-                (
-                    table_name
-                    for key, table_name in table_name_map.items()
-                    if key == required or key.endswith(f".{required}")
-                ),
-                None,
-            )
-
-        loans_table_name = _resolve_table("bank_loans")
-        customers_table_name = _resolve_table("bank_customers")
-        if not loans_table_name and not customers_table_name:
-            return None
-
-        db_type = input.database_type or getattr(self.config.database, "db_type", "postgresql")
-        if db_type != "postgresql":
-            return None
-
-        # If one side is missing from retrieval context, fall back to canonical fintech table names.
-        if not loans_table_name:
-            loans_table_name = "public.bank_loans"
-        if not customers_table_name:
-            customers_table_name = "public.bank_customers"
-
-        loans_table = self.catalog.format_table_reference(loans_table_name, db_type=db_type)
-        customers_table = self.catalog.format_table_reference(customers_table_name, db_type=db_type)
-        if not loans_table or not customers_table:
-            return None
-
-        sql = (
-            "SELECT"
-            "   c.segment,"
-            "   COUNT(*) AS total_loans,"
-            "   COUNT(*) FILTER ("
-            "     WHERE l.days_past_due >= 90 OR l.status = 'non_performing'"
-            "   ) AS defaulted_loans,"
-            "   ROUND("
-            "     100.0 * COUNT(*) FILTER ("
-            "       WHERE l.days_past_due >= 90 OR l.status = 'non_performing'"
-            "     ) / NULLIF(COUNT(*), 0),"
-            "     2"
-            "   ) AS default_rate_pct,"
-            "   ROUND(AVG(l.days_past_due)::numeric, 2) AS avg_days_past_due"
-            f" FROM {loans_table} l"
-            f" JOIN {customers_table} c ON c.customer_id = l.customer_id"
-            " GROUP BY c.segment"
-            " ORDER BY default_rate_pct DESC, avg_days_past_due DESC"
-        )
-
-        return GeneratedSQL(
-            sql=sql,
-            explanation="Computed loan default rate by customer segment using 90+ DPD/non-performing default proxy.",
-            used_datapoints=[],
-            confidence=0.8,
-            assumptions=[
-                "Default proxy uses days_past_due >= 90 or status = 'non_performing'.",
-                "Segment comes from bank_customers joined via customer_id.",
-            ],
-            clarifying_questions=[],
-        )
+    def _try_domain_pack_templates(
+        self, input: SQLAgentInput
+    ) -> tuple[str, GeneratedSQL] | None:
+        for pack in DOMAIN_PACKS:
+            for builder_name, builder in pack.sql_builders:
+                generated = builder(self, input)
+                if generated is not None:
+                    return (f"{pack.name}_{builder_name}", generated)
+        return None
 
     def _collect_available_table_names(self, input: SQLAgentInput) -> dict[str, str]:
         table_map: dict[str, str] = {}
@@ -3710,7 +3540,7 @@ class SQLAgent(BaseAgent):
         ):
             sql = backend_variants[db_type]
 
-        sql = self._fill_template_defaults(sql, metadata.get("parameters"))
+        sql = self._fill_template_defaults(sql, metadata.get("parameters"), input.query)
 
         logger.info(
             f"Using QueryDataPoint template: {matched_dp.datapoint_id}",
@@ -3809,6 +3639,11 @@ class SQLAgent(BaseAgent):
         ):
             score += 1.5
 
+        for pack in DOMAIN_PACKS:
+            if pack.adjust_template_score is None:
+                continue
+            score += pack.adjust_template_score(query_lower, template_text)
+
         return score
 
     def _tokenize_template_match_terms(self, text: str) -> set[str]:
@@ -3861,6 +3696,7 @@ class SQLAgent(BaseAgent):
         self,
         sql_template: str,
         parameters: dict[str, Any] | str | None,
+        query: str | None = None,
     ) -> str:
         """
         Fill SQL template placeholders with default values.
@@ -3885,6 +3721,7 @@ class SQLAgent(BaseAgent):
             return sql_template
 
         sql = sql_template
+        query_lower = (query or "").lower()
         for param_name, param_def in parameters.items():
             placeholder = f"{{{param_name}}}"
             if placeholder not in sql:
@@ -3893,7 +3730,13 @@ class SQLAgent(BaseAgent):
             if not isinstance(param_def, dict):
                 continue
 
-            default_value = param_def.get("default")
+            default_value = self._extract_template_parameter_value(
+                query_lower=query_lower,
+                param_name=param_name,
+                param_def=param_def,
+            )
+            if default_value is None:
+                default_value = param_def.get("default")
             if default_value is None:
                 continue
 
@@ -3910,6 +3753,60 @@ class SQLAgent(BaseAgent):
             sql = sql.replace(placeholder, formatted_value)
 
         return sql
+
+    def _extract_template_parameter_value(
+        self,
+        *,
+        query_lower: str,
+        param_name: str,
+        param_def: dict[str, Any],
+    ) -> Any:
+        if not query_lower:
+            return None
+
+        param_type = str(param_def.get("type") or "string").lower()
+        if param_type not in {"integer", "float"}:
+            return None
+
+        name = param_name.lower()
+        integer_patterns = []
+        if any(token in name for token in ("top", "limit", "count", "rows", "n")):
+            integer_patterns.extend(
+                [
+                    r"\btop\s+(\d+)\b",
+                    r"\blimit\s+(\d+)\b",
+                    r"\bfirst\s+(\d+)\b",
+                ]
+            )
+        if "week" in name:
+            integer_patterns.extend(
+                [r"\blast\s+(\d+)\s+weeks?\b", r"\b(\d+)\s+weeks?\b"]
+            )
+        if "day" in name:
+            integer_patterns.extend(
+                [r"\blast\s+(\d+)\s+days?\b", r"\b(\d+)\s+days?\b"]
+            )
+        if "month" in name:
+            integer_patterns.extend(
+                [r"\blast\s+(\d+)\s+months?\b", r"\b(\d+)\s+months?\b"]
+            )
+        if "year" in name:
+            integer_patterns.extend(
+                [r"\blast\s+(\d+)\s+years?\b", r"\b(\d+)\s+years?\b"]
+            )
+
+        for pattern in integer_patterns:
+            match = re.search(pattern, query_lower)
+            if not match:
+                continue
+            value = match.group(1)
+            try:
+                if param_type == "float":
+                    return float(value)
+                return int(value)
+            except ValueError:
+                continue
+        return None
 
     def _apply_context_accuracy_guards(
         self, generated_sql: GeneratedSQL, input: SQLAgentInput

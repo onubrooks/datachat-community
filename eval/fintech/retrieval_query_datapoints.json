@@ -1,0 +1,23 @@
+[
+  {
+    "query": "Show top 5 customer segments by deposits.",
+    "expected_datapoint_ids": [
+      "query_public_segment_flows_top_customer_segment_deposit_amount"
+    ],
+    "notes": "Generated top-N query datapoint should match grouped deposit ranking by segment."
+  },
+  {
+    "query": "Show weekly deposit trend for the last 6 weeks.",
+    "expected_datapoint_ids": [
+      "query_public_segment_flows_weekly_deposit_amount_trend"
+    ],
+    "notes": "Generated weekly trend datapoint should be retrieved for recent deposit trend prompts."
+  },
+  {
+    "query": "Show total deposits, withdrawals, and net flow by customer segment for the last 8 weeks.",
+    "expected_datapoint_ids": [
+      "query_public_segment_flows_weekly_net_flow_by_dimension"
+    ],
+    "notes": "Generated net-flow query datapoint should be retrieved for grouped inflow/outflow prompts."
+  }
+]

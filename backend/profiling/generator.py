@@ -8,7 +8,13 @@ from collections.abc import Iterable
 
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
-from backend.models.datapoint import BusinessDataPoint, ColumnMetadata, SchemaDataPoint
+from backend.models.datapoint import (
+    BusinessDataPoint,
+    ColumnMetadata,
+    QueryDataPoint,
+    QueryParameter,
+    SchemaDataPoint,
+)
 from backend.profiling.models import (
     ColumnProfile,
     DatabaseProfile,
@@ -52,6 +58,7 @@ class DataPointGenerator:
     ) -> GeneratedDataPoints:
         selected_tables = self._select_tables(profile.tables, tables, max_tables)
         schema_points: list[GeneratedDataPoint] = []
+        query_points: list[GeneratedDataPoint] = []
 
         use_llm_schema = depth == "metrics_full"
         for idx, table in enumerate(selected_tables, start=1):
@@ -59,6 +66,8 @@ class DataPointGenerator:
                 schema_points.append(await self._generate_schema_datapoint(table, idx))
             else:
                 schema_points.append(self._generate_schema_datapoint_deterministic(table, idx))
+            if depth != "schema_only":
+                query_points.extend(self._generate_query_datapoints(table))
 
         business_points: list[GeneratedDataPoint] = []
         if depth == "schema_only":
@@ -67,6 +76,7 @@ class DataPointGenerator:
                     profile_id=profile.profile_id,
                     schema_datapoints=schema_points,
                     business_datapoints=business_points,
+                    query_datapoints=query_points,
                 )
             )
             self._attach_connection_metadata(result, str(profile.connection_id))
@@ -92,6 +102,7 @@ class DataPointGenerator:
                 profile_id=profile.profile_id,
                 schema_datapoints=schema_points,
                 business_datapoints=business_points,
+                query_datapoints=query_points,
             )
         )
         self._attach_connection_metadata(result, str(profile.connection_id))
@@ -101,7 +112,7 @@ class DataPointGenerator:
     def _attach_connection_metadata(
         generated: GeneratedDataPoints, connection_id: str
     ) -> None:
-        for item in [*generated.schema_datapoints, *generated.business_datapoints]:
+        for item in generated.all_items():
             payload = item.datapoint
             if not isinstance(payload, dict):
                 continue
@@ -826,6 +837,949 @@ class DataPointGenerator:
         scored.sort(reverse=True)
         return scored[0][1]
 
+    @staticmethod
+    def _is_identifier_like(column_name: str) -> bool:
+        normalized = column_name.lower()
+        return (
+            normalized == "id"
+            or normalized.endswith("_id")
+            or normalized.endswith("uuid")
+            or normalized.endswith("_key")
+        )
+
+    @staticmethod
+    def _dimension_priority(column: ColumnProfile) -> tuple[int, int]:
+        name = column.name.lower()
+        score = 0
+        if any(token in name for token in ("segment", "category", "region", "store", "channel", "status", "type")):
+            score += 5
+        if any(token in name for token in ("customer", "account", "product", "supplier", "team")):
+            score += 3
+        distinct = column.distinct_count if isinstance(column.distinct_count, int) else 0
+        return (score, -distinct)
+
+    def _select_dimension_column(self, columns: list[ColumnProfile]) -> ColumnProfile | None:
+        candidates = [
+            col
+            for col in columns
+            if not self._is_numeric_data_type(col.data_type)
+            and not self._is_temporal_data_type(col.data_type)
+            and not self._is_identifier_like(col.name)
+        ]
+        if not candidates:
+            return None
+        return sorted(candidates, key=self._dimension_priority, reverse=True)[0]
+
+    @staticmethod
+    def _time_priority(column: ColumnProfile) -> tuple[int, int]:
+        name = column.name.lower()
+        score = 0
+        if "created" in name:
+            score += 5
+        if "date" in name:
+            score += 4
+        if "time" in name or "timestamp" in name:
+            score += 3
+        distinct = column.distinct_count if isinstance(column.distinct_count, int) else 0
+        return (score, distinct)
+
+    def _select_time_column(self, columns: list[ColumnProfile]) -> ColumnProfile | None:
+        candidates = [col for col in columns if self._is_temporal_data_type(col.data_type)]
+        if not candidates:
+            return None
+        return sorted(candidates, key=self._time_priority, reverse=True)[0]
+
+    def _generate_query_datapoints(self, table: TableProfile) -> list[GeneratedDataPoint]:
+        table_key = f"{table.schema_name}.{table.name}"
+        numeric_columns = self._select_measure_columns(table.columns, limit=2)
+        time_column = self._select_time_column(table.columns)
+        dimension_column = self._select_dimension_column(table.columns)
+
+        query_points: list[GeneratedDataPoint] = []
+        query_points.extend(self._build_transaction_flow_query_datapoints(table=table))
+        primary_measure = numeric_columns[0] if numeric_columns else None
+        if primary_measure and dimension_column:
+            query_points.extend(
+                [
+                    self._build_top_n_query_datapoint(
+                        table=table,
+                        dimension_column=dimension_column,
+                        measure_column=primary_measure,
+                    ),
+                    self._build_average_by_dimension_query_datapoint(
+                        table=table,
+                        dimension_column=dimension_column,
+                        measure_column=primary_measure,
+                    ),
+                    self._build_share_of_total_query_datapoint(
+                        table=table,
+                        dimension_column=dimension_column,
+                        measure_column=primary_measure,
+                    ),
+                ]
+            )
+        if time_column:
+            for measure_column in numeric_columns[:2]:
+                query_points.extend(
+                    [
+                        self._build_weekly_trend_query_datapoint(
+                            table=table,
+                            time_column=time_column,
+                            measure_column=measure_column,
+                            dimension_column=dimension_column,
+                        ),
+                        self._build_monthly_trend_query_datapoint(
+                            table=table,
+                            time_column=time_column,
+                            measure_column=measure_column,
+                            dimension_column=dimension_column,
+                        ),
+                    ]
+                )
+
+        flow_query = self._build_net_flow_query_datapoint(
+            table=table,
+            time_column=time_column,
+            dimension_column=dimension_column,
+        )
+        if flow_query is not None:
+            query_points.append(flow_query)
+
+        deduped: dict[str, GeneratedDataPoint] = {}
+        for item in query_points:
+            datapoint_id = str(item.datapoint.get("datapoint_id") or "")
+            if datapoint_id and datapoint_id not in deduped:
+                deduped[datapoint_id] = item
+        return list(deduped.values())
+
+    def _build_query_metadata(
+        self,
+        table: TableProfile,
+        *,
+        query_family: str,
+        primary_dimension: str | None,
+        primary_measure: str | None,
+        time_grain: str | None = None,
+    ) -> dict[str, object]:
+        metadata = self._contract_metadata(
+            table,
+            source="auto-profiler-query-template",
+            grain="query-level",
+            freshness="unknown",
+        )
+        metadata.update(
+            {
+                "query_family": query_family,
+                "primary_dimension": primary_dimension,
+                "primary_measure": primary_measure,
+                "time_grain": time_grain,
+            }
+        )
+        return metadata
+
+    @staticmethod
+    def _anchor_ref_expr(
+        *,
+        dialect: str,
+        table_key: str,
+        time_column_name: str,
+        filter_clause: str | None = None,
+    ) -> tuple[str, str]:
+        where_clause = f" WHERE {filter_clause}" if filter_clause else ""
+        if dialect == "clickhouse":
+            prefix = (
+                f"WITH (SELECT max({time_column_name}) FROM {table_key}{where_clause}) AS anchor_date "
+            )
+            return prefix, "coalesce(anchor_date, today())"
+
+        prefix = (
+            f"WITH anchor AS (SELECT MAX({time_column_name}) AS anchor_date FROM "
+            f"{table_key}{where_clause}) "
+        )
+        return prefix, "COALESCE((SELECT anchor_date FROM anchor), CURRENT_DATE)"
+
+    def _build_transaction_flow_query_datapoints(
+        self, *, table: TableProfile
+    ) -> list[GeneratedDataPoint]:
+        time_column = self._select_time_column(table.columns)
+        if time_column is None:
+            return []
+
+        amount_column = next(
+            (
+                column
+                for column in self._select_measure_columns(table.columns, limit=3)
+                if "amount" in column.name.lower()
+            ),
+            None,
+        )
+        if amount_column is None:
+            return []
+
+        direction_column = next(
+            (
+                column
+                for column in table.columns
+                if not self._is_numeric_data_type(column.data_type)
+                and any(token in column.name.lower() for token in ("direction", "flow_direction"))
+                and any(
+                    value.lower() in {"credit", "debit"}
+                    for value in column.sample_values
+                    if isinstance(value, str)
+                )
+            ),
+            None,
+        )
+        if direction_column is None:
+            return []
+
+        query_points = [
+            self._build_filtered_flow_trend_query_datapoint(
+                table=table,
+                time_column=time_column,
+                amount_column=amount_column,
+                direction_column=direction_column,
+                event_name="Deposit",
+                direction_value="credit",
+                time_grain="week",
+            ),
+            self._build_filtered_flow_trend_query_datapoint(
+                table=table,
+                time_column=time_column,
+                amount_column=amount_column,
+                direction_column=direction_column,
+                event_name="Deposit",
+                direction_value="credit",
+                time_grain="month",
+            ),
+            self._build_filtered_flow_trend_query_datapoint(
+                table=table,
+                time_column=time_column,
+                amount_column=amount_column,
+                direction_column=direction_column,
+                event_name="Withdrawal",
+                direction_value="debit",
+                time_grain="week",
+            ),
+            self._build_filtered_flow_trend_query_datapoint(
+                table=table,
+                time_column=time_column,
+                amount_column=amount_column,
+                direction_column=direction_column,
+                event_name="Withdrawal",
+                direction_value="debit",
+                time_grain="month",
+            ),
+        ]
+        return query_points
+
+    @staticmethod
+    def _measure_priority(column: ColumnProfile) -> tuple[int, int]:
+        name = column.name.lower()
+        score = 0
+        if any(token in name for token in ("revenue", "deposit", "withdraw", "amount", "balance")):
+            score += 6
+        if any(token in name for token in ("cost", "margin", "fee", "value", "sales")):
+            score += 4
+        if any(token in name for token in ("qty", "quantity", "count", "total", "score")):
+            score += 2
+        distinct = column.distinct_count if isinstance(column.distinct_count, int) else 0
+        return (score, distinct)
+
+    def _select_measure_columns(
+        self, columns: list[ColumnProfile], limit: int = 2
+    ) -> list[ColumnProfile]:
+        candidates = [
+            col
+            for col in columns
+            if self._is_numeric_type(col.data_type) and not self._is_identifier_like(col.name)
+        ]
+        if not candidates:
+            return []
+        ranked = sorted(candidates, key=self._measure_priority, reverse=True)
+        return ranked[:limit]
+
+    def _build_top_n_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        dimension_column: ColumnProfile,
+        measure_column: ColumnProfile,
+    ) -> GeneratedDataPoint:
+        table_key = f"{table.schema_name}.{table.name}"
+        measure_name = self._title_case(measure_column.name)
+        dimension_name = self._title_case(dimension_column.name)
+        measure_alias = f"total_{self._slugify(measure_column.name)}"
+        sql_template = (
+            f"SELECT {dimension_column.name}, SUM({measure_column.name}) AS {measure_alias} "
+            f"FROM {table_key} "
+            f"GROUP BY 1 "
+            f"ORDER BY {measure_alias} DESC "
+            f"LIMIT {{top_n}}"
+        )
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, f"top_{dimension_column.name}_{measure_column.name}"),
+            name=f"Top {dimension_name} by {measure_name}",
+            sql_template=sql_template,
+            parameters={
+                "top_n": QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=10,
+                    description="Number of ranked rows to return.",
+                )
+            },
+            description=(
+                f"Ranks {dimension_name.lower()} values by summed {measure_name.lower()} in "
+                f"{table_key}."
+            ),
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                "ranking",
+                "top_n",
+                self._slugify(dimension_column.name),
+                self._slugify(measure_column.name),
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family="top_n_ranking",
+                primary_dimension=dimension_column.name,
+                primary_measure=measure_column.name,
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.72,
+            explanation="Deterministic top-N query template from profiled dimension and measure columns.",
+        )
+
+    def _build_average_by_dimension_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        dimension_column: ColumnProfile,
+        measure_column: ColumnProfile,
+    ) -> GeneratedDataPoint:
+        table_key = f"{table.schema_name}.{table.name}"
+        measure_slug = self._slugify(measure_column.name)
+        measure_name = self._title_case(measure_column.name)
+        dimension_name = self._title_case(dimension_column.name)
+        sql_template = (
+            f"SELECT {dimension_column.name}, AVG({measure_column.name}) AS avg_{measure_slug} "
+            f"FROM {table_key} "
+            f"GROUP BY 1 "
+            f"ORDER BY avg_{measure_slug} DESC "
+            f"LIMIT {{top_n}}"
+        )
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, f"avg_{dimension_column.name}_{measure_column.name}"),
+            name=f"Average {measure_name} by {dimension_name}",
+            sql_template=sql_template,
+            parameters={
+                "top_n": QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=10,
+                    description="Number of grouped rows to return.",
+                )
+            },
+            description=(
+                f"Compares average {measure_name.lower()} across "
+                f"{dimension_name.lower()} values in {table_key}."
+            ),
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                "average",
+                "grouped",
+                self._slugify(dimension_column.name),
+                self._slugify(measure_column.name),
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family="average_by_dimension",
+                primary_dimension=dimension_column.name,
+                primary_measure=measure_column.name,
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.7,
+            explanation="Deterministic grouped average template from profiled dimension and measure columns.",
+        )
+
+    def _build_share_of_total_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        dimension_column: ColumnProfile,
+        measure_column: ColumnProfile,
+    ) -> GeneratedDataPoint:
+        table_key = f"{table.schema_name}.{table.name}"
+        measure_slug = self._slugify(measure_column.name)
+        measure_name = self._title_case(measure_column.name)
+        dimension_name = self._title_case(dimension_column.name)
+        postgres_template = (
+            f"WITH grouped AS ("
+            f"SELECT {dimension_column.name}, SUM({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"GROUP BY 1"
+            f") "
+            f"SELECT {dimension_column.name}, total_{measure_slug}, "
+            f"total_{measure_slug} / NULLIF(SUM(total_{measure_slug}) OVER (), 0) AS share_of_total "
+            f"FROM grouped "
+            f"ORDER BY total_{measure_slug} DESC "
+            f"LIMIT {{top_n}}"
+        )
+        clickhouse_variant = (
+            f"WITH grouped AS ("
+            f"SELECT {dimension_column.name}, sum({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"GROUP BY 1"
+            f") "
+            f"SELECT {dimension_column.name}, total_{measure_slug}, "
+            f"total_{measure_slug} / nullIf(sum(total_{measure_slug}) OVER (), 0) AS share_of_total "
+            f"FROM grouped "
+            f"ORDER BY total_{measure_slug} DESC "
+            f"LIMIT {{top_n}}"
+        )
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, f"share_{dimension_column.name}_{measure_column.name}"),
+            name=f"{measure_name} Share by {dimension_name}",
+            sql_template=postgres_template,
+            parameters={
+                "top_n": QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=10,
+                    description="Number of grouped rows to return.",
+                )
+            },
+            description=(
+                f"Shows each {dimension_name.lower()} value's share of total "
+                f"{measure_name.lower()} in {table_key}."
+            ),
+            backend_variants={
+                "mysql": postgres_template,
+                "clickhouse": clickhouse_variant,
+            },
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                "share_of_total",
+                "composition",
+                self._slugify(dimension_column.name),
+                self._slugify(measure_column.name),
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family="share_of_total",
+                primary_dimension=dimension_column.name,
+                primary_measure=measure_column.name,
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.69,
+            explanation="Deterministic share-of-total template from profiled dimension and measure columns.",
+        )
+
+    def _build_weekly_trend_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        time_column: ColumnProfile,
+        measure_column: ColumnProfile,
+        dimension_column: ColumnProfile | None,
+    ) -> GeneratedDataPoint:
+        table_key = f"{table.schema_name}.{table.name}"
+        measure_slug = self._slugify(measure_column.name)
+        measure_name = self._title_case(measure_column.name)
+        group_dimension = ""
+        description_suffix = ""
+        if dimension_column is not None:
+            group_dimension = f", {dimension_column.name}"
+            description_suffix = f" by {self._title_case(dimension_column.name).lower()}"
+
+        postgres_prefix, postgres_anchor_ref = self._anchor_ref_expr(
+            dialect="postgresql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
+        postgres_template = (
+            f"{postgres_prefix}"
+            f"SELECT DATE_TRUNC('week', {time_column.name}) AS week_start{group_dimension}, "
+            f"SUM({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{lookback_weeks}} weeks' "
+            f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
+            f"ORDER BY 1 DESC"
+        )
+        mysql_prefix, mysql_anchor_ref = self._anchor_ref_expr(
+            dialect="mysql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
+        mysql_variant = (
+            f"{mysql_prefix}"
+            f"SELECT DATE_SUB(DATE({time_column.name}), INTERVAL WEEKDAY({time_column.name}) DAY) AS week_start{group_dimension}, "
+            f"SUM({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{lookback_weeks}} WEEK) "
+            f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
+            f"ORDER BY 1 DESC"
+        )
+        clickhouse_prefix, clickhouse_anchor_ref = self._anchor_ref_expr(
+            dialect="clickhouse",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
+        clickhouse_variant = (
+            f"{clickhouse_prefix}"
+            f"SELECT toStartOfWeek({time_column.name}) AS week_start{group_dimension}, "
+            f"sum({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{lookback_weeks}} WEEK "
+            f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
+            f"ORDER BY 1 DESC"
+        )
+
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, f"weekly_{measure_column.name}_trend"),
+            name=f"Weekly {measure_name} Trend",
+            sql_template=postgres_template,
+            parameters={
+                "lookback_weeks": QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=8,
+                    description="Number of recent weeks to include.",
+                )
+            },
+            description=(
+                f"Shows weekly {measure_name.lower()} totals{description_suffix} for the last "
+                f"number of weeks in {table_key}."
+            ),
+            backend_variants={
+                "mysql": mysql_variant,
+                "clickhouse": clickhouse_variant,
+            },
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                "weekly",
+                "trend",
+                "time_series",
+                measure_slug,
+                *( [self._slugify(dimension_column.name)] if dimension_column is not None else [] ),
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family="weekly_trend",
+                primary_dimension=dimension_column.name if dimension_column is not None else None,
+                primary_measure=measure_column.name,
+                time_grain="week",
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.74,
+            explanation="Deterministic weekly trend template from profiled time and measure columns.",
+        )
+
+    def _build_monthly_trend_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        time_column: ColumnProfile,
+        measure_column: ColumnProfile,
+        dimension_column: ColumnProfile | None,
+    ) -> GeneratedDataPoint:
+        table_key = f"{table.schema_name}.{table.name}"
+        measure_slug = self._slugify(measure_column.name)
+        measure_name = self._title_case(measure_column.name)
+        group_dimension = ""
+        description_suffix = ""
+        if dimension_column is not None:
+            group_dimension = f", {dimension_column.name}"
+            description_suffix = f" by {self._title_case(dimension_column.name).lower()}"
+
+        postgres_prefix, postgres_anchor_ref = self._anchor_ref_expr(
+            dialect="postgresql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
+        postgres_template = (
+            f"{postgres_prefix}"
+            f"SELECT DATE_TRUNC('month', {time_column.name}) AS month_start{group_dimension}, "
+            f"SUM({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{lookback_months}} months' "
+            f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
+            f"ORDER BY 1 DESC"
+        )
+        mysql_prefix, mysql_anchor_ref = self._anchor_ref_expr(
+            dialect="mysql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
+        mysql_variant = (
+            f"{mysql_prefix}"
+            f"SELECT DATE_FORMAT({time_column.name}, '%Y-%m-01') AS month_start{group_dimension}, "
+            f"SUM({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{lookback_months}} MONTH) "
+            f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
+            f"ORDER BY 1 DESC"
+        )
+        clickhouse_prefix, clickhouse_anchor_ref = self._anchor_ref_expr(
+            dialect="clickhouse",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
+        clickhouse_variant = (
+            f"{clickhouse_prefix}"
+            f"SELECT toStartOfMonth({time_column.name}) AS month_start{group_dimension}, "
+            f"sum({measure_column.name}) AS total_{measure_slug} "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{lookback_months}} MONTH "
+            f"GROUP BY 1{', 2' if dimension_column is not None else ''} "
+            f"ORDER BY 1 DESC"
+        )
+
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, f"monthly_{measure_column.name}_trend"),
+            name=f"Monthly {measure_name} Trend",
+            sql_template=postgres_template,
+            parameters={
+                "lookback_months": QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=6,
+                    description="Number of recent months to include.",
+                )
+            },
+            description=(
+                f"Shows monthly {measure_name.lower()} totals{description_suffix} for recent months "
+                f"in {table_key}."
+            ),
+            backend_variants={
+                "mysql": mysql_variant,
+                "clickhouse": clickhouse_variant,
+            },
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                "monthly",
+                "trend",
+                "time_series",
+                measure_slug,
+                *([self._slugify(dimension_column.name)] if dimension_column is not None else []),
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family="monthly_trend",
+                primary_dimension=dimension_column.name if dimension_column is not None else None,
+                primary_measure=measure_column.name,
+                time_grain="month",
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.73,
+            explanation="Deterministic monthly trend template from profiled time and measure columns.",
+        )
+
+    def _build_net_flow_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        time_column: ColumnProfile | None,
+        dimension_column: ColumnProfile | None,
+    ) -> GeneratedDataPoint | None:
+        if time_column is None or dimension_column is None:
+            return None
+
+        deposits_column = None
+        withdrawals_column = None
+        for column in table.columns:
+            if not self._is_numeric_type(column.data_type):
+                continue
+            normalized = column.name.lower()
+            if deposits_column is None and any(token in normalized for token in ("deposit", "inflow", "credit")):
+                deposits_column = column
+            if withdrawals_column is None and any(token in normalized for token in ("withdraw", "outflow", "debit")):
+                withdrawals_column = column
+
+        if deposits_column is None or withdrawals_column is None:
+            return None
+
+        table_key = f"{table.schema_name}.{table.name}"
+        postgres_prefix, postgres_anchor_ref = self._anchor_ref_expr(
+            dialect="postgresql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
+        postgres_template = (
+            f"{postgres_prefix}"
+            f"SELECT DATE_TRUNC('week', {time_column.name}) AS week_start, "
+            f"{dimension_column.name}, "
+            f"SUM({deposits_column.name}) AS total_deposits, "
+            f"SUM({withdrawals_column.name}) AS total_withdrawals, "
+            f"SUM({deposits_column.name}) - SUM({withdrawals_column.name}) AS net_flow "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{lookback_weeks}} weeks' "
+            f"GROUP BY 1, 2 "
+            f"ORDER BY 1 DESC, net_flow DESC"
+        )
+        mysql_prefix, mysql_anchor_ref = self._anchor_ref_expr(
+            dialect="mysql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
+        mysql_variant = (
+            f"{mysql_prefix}"
+            f"SELECT DATE_SUB(DATE({time_column.name}), INTERVAL WEEKDAY({time_column.name}) DAY) AS week_start, "
+            f"{dimension_column.name}, "
+            f"SUM({deposits_column.name}) AS total_deposits, "
+            f"SUM({withdrawals_column.name}) AS total_withdrawals, "
+            f"SUM({deposits_column.name}) - SUM({withdrawals_column.name}) AS net_flow "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{lookback_weeks}} WEEK) "
+            f"GROUP BY 1, 2 "
+            f"ORDER BY 1 DESC, net_flow DESC"
+        )
+        clickhouse_prefix, clickhouse_anchor_ref = self._anchor_ref_expr(
+            dialect="clickhouse",
+            table_key=table_key,
+            time_column_name=time_column.name,
+        )
+        clickhouse_variant = (
+            f"{clickhouse_prefix}"
+            f"SELECT toStartOfWeek({time_column.name}) AS week_start, "
+            f"{dimension_column.name}, "
+            f"sum({deposits_column.name}) AS total_deposits, "
+            f"sum({withdrawals_column.name}) AS total_withdrawals, "
+            f"sum({deposits_column.name}) - sum({withdrawals_column.name}) AS net_flow "
+            f"FROM {table_key} "
+            f"WHERE {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{lookback_weeks}} WEEK "
+            f"GROUP BY 1, 2 "
+            f"ORDER BY 1 DESC, net_flow DESC"
+        )
+
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, "weekly_net_flow_by_dimension"),
+            name=f"Weekly Deposits, Withdrawals, and Net Flow by {self._title_case(dimension_column.name)}",
+            sql_template=postgres_template,
+            parameters={
+                "lookback_weeks": QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=8,
+                    description="Number of recent weeks to include.",
+                )
+            },
+            description=(
+                f"Shows total deposits, withdrawals, and net flow by "
+                f"{self._title_case(dimension_column.name).lower()} for recent weeks."
+            ),
+            backend_variants={
+                "mysql": mysql_variant,
+                "clickhouse": clickhouse_variant,
+            },
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                "net_flow",
+                "deposits",
+                "withdrawals",
+                "weekly",
+                self._slugify(dimension_column.name),
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family="net_flow",
+                primary_dimension=dimension_column.name,
+                primary_measure=f"{deposits_column.name},{withdrawals_column.name}",
+                time_grain="week",
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.8,
+            explanation="Heuristic net-flow template generated from paired deposit and withdrawal measures.",
+        )
+
+    def _build_filtered_flow_trend_query_datapoint(
+        self,
+        *,
+        table: TableProfile,
+        time_column: ColumnProfile,
+        amount_column: ColumnProfile,
+        direction_column: ColumnProfile,
+        event_name: str,
+        direction_value: str,
+        time_grain: str,
+    ) -> GeneratedDataPoint:
+        table_key = f"{table.schema_name}.{table.name}"
+        amount_slug = self._slugify(amount_column.name)
+        event_slug = self._slugify(event_name)
+        filter_clause = f"{direction_column.name} = '{direction_value}'"
+        parameter_name = "lookback_weeks" if time_grain == "week" else "lookback_months"
+        parameter_unit = "weeks" if time_grain == "week" else "months"
+        default_value = 8 if time_grain == "week" else 6
+
+        postgres_prefix, postgres_anchor_ref = self._anchor_ref_expr(
+            dialect="postgresql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+            filter_clause=filter_clause,
+        )
+        mysql_prefix, mysql_anchor_ref = self._anchor_ref_expr(
+            dialect="mysql",
+            table_key=table_key,
+            time_column_name=time_column.name,
+            filter_clause=filter_clause,
+        )
+        clickhouse_prefix, clickhouse_anchor_ref = self._anchor_ref_expr(
+            dialect="clickhouse",
+            table_key=table_key,
+            time_column_name=time_column.name,
+            filter_clause=filter_clause,
+        )
+
+        if time_grain == "week":
+            grain_label = "weekly"
+            postgres_template = (
+                f"{postgres_prefix}"
+                f"SELECT DATE_TRUNC('week', {time_column.name}) AS week_start, "
+                f"SUM({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{{parameter_name}}} weeks' "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            mysql_variant = (
+                f"{mysql_prefix}"
+                f"SELECT DATE_SUB(DATE({time_column.name}), INTERVAL WEEKDAY({time_column.name}) DAY) AS week_start, "
+                f"SUM({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{{parameter_name}}} WEEK) "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            clickhouse_variant = (
+                f"{clickhouse_prefix}"
+                f"SELECT toStartOfWeek({time_column.name}) AS week_start, "
+                f"sum({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{{parameter_name}}} WEEK "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            query_family = f"{grain_label}_{event_slug}_trend"
+            name = f"Weekly {event_name} Trend from Latest {event_name} Date"
+        else:
+            grain_label = "monthly"
+            postgres_template = (
+                f"{postgres_prefix}"
+                f"SELECT DATE_TRUNC('month', {time_column.name}) AS month_start, "
+                f"SUM({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= {postgres_anchor_ref} - INTERVAL '{{{parameter_name}}} months' "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            mysql_variant = (
+                f"{mysql_prefix}"
+                f"SELECT DATE_FORMAT({time_column.name}, '%Y-%m-01') AS month_start, "
+                f"SUM({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= DATE_SUB({mysql_anchor_ref}, INTERVAL {{{parameter_name}}} MONTH) "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            clickhouse_variant = (
+                f"{clickhouse_prefix}"
+                f"SELECT toStartOfMonth({time_column.name}) AS month_start, "
+                f"sum({amount_column.name}) AS total_{event_slug}_{amount_slug} "
+                f"FROM {table_key} "
+                f"WHERE {filter_clause} "
+                f"AND {time_column.name} >= {clickhouse_anchor_ref} - INTERVAL {{{parameter_name}}} MONTH "
+                f"GROUP BY 1 "
+                f"ORDER BY 1 DESC"
+            )
+            query_family = f"{grain_label}_{event_slug}_trend"
+            name = f"Monthly {event_name} Trend from Latest {event_name} Date"
+
+        datapoint = QueryDataPoint(
+            datapoint_id=self._make_query_id(table_key, f"{grain_label}_{event_slug}_trend"),
+            name=name,
+            sql_template=postgres_template,
+            parameters={
+                parameter_name: QueryParameter(
+                    type="integer",
+                    required=False,
+                    default=default_value,
+                    description=f"Number of recent {parameter_unit} to include.",
+                )
+            },
+            description=(
+                f"Shows {time_grain}ly {event_name.lower()} totals using {amount_column.name} "
+                f"and anchors the lookback on the latest {event_name.lower()} date in {table_key}."
+            ),
+            backend_variants={
+                "mysql": mysql_variant,
+                "clickhouse": clickhouse_variant,
+            },
+            related_tables=[table_key],
+            owner=_DEFAULT_OWNER,
+            tags=[
+                "auto-profiled",
+                "query-template",
+                f"{time_grain}ly",
+                "trend",
+                event_slug,
+                direction_value,
+                "latest_date_anchor",
+                self._slugify(direction_column.name),
+                amount_slug,
+            ],
+            metadata=self._build_query_metadata(
+                table,
+                query_family=query_family,
+                primary_dimension=None,
+                primary_measure=amount_column.name,
+                time_grain=time_grain,
+            ),
+        )
+        return GeneratedDataPoint(
+            datapoint=datapoint.model_dump(mode="json", by_alias=True),
+            confidence=0.83,
+            explanation=(
+                f"Transaction-flow {time_grain} trend template generated from "
+                f"{direction_column.name}={direction_value} and anchored on the latest matching date."
+            ),
+        )
+
     def _derive_table_purpose(self, table: TableProfile) -> str:
         column_names = [col.name for col in table.columns[:5]]
         hints = ""
@@ -865,6 +1819,10 @@ class DataPointGenerator:
     def _make_metric_id(self, table: str, metric_name: str) -> str:
         slug = self._slugify(f"{table}_{metric_name}")
         return f"metric_{slug}"
+
+    def _make_query_id(self, table: str, query_name: str) -> str:
+        slug = self._slugify(f"{table}_{query_name}")
+        return f"query_{slug}"
 
     @staticmethod
     def _title_case(value: str) -> str:
@@ -935,10 +1893,21 @@ class DataPointGenerator:
             if not existing or item.confidence >= existing.confidence:
                 business_map[key] = item
 
+        query_map: dict[str, GeneratedDataPoint] = {}
+        for item in generated.query_datapoints:
+            datapoint = item.datapoint or {}
+            datapoint_id = str(datapoint.get("datapoint_id") or "")
+            if not datapoint_id:
+                continue
+            existing = query_map.get(datapoint_id)
+            if not existing or item.confidence >= existing.confidence:
+                query_map[datapoint_id] = item
+
         return GeneratedDataPoints(
             profile_id=generated.profile_id,
             schema_datapoints=list(schema_map.values()),
             business_datapoints=list(business_map.values()),
+            query_datapoints=list(query_map.values()),
         )
 
     def _build_metric_prompt(self, table: TableProfile, numeric_columns: list) -> str:

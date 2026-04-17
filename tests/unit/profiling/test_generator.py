@@ -52,11 +52,116 @@ def _sample_profile():
                 max_value="20.0",
             ),
             ColumnProfile(
+                name="customer_segment",
+                data_type="varchar",
+                nullable=False,
+                sample_values=["retail", "smb"],
+                distinct_count=4,
+            ),
+            ColumnProfile(
                 name="created_at",
                 data_type="timestamp",
                 nullable=False,
                 sample_values=["2024-01-01"],
                 distinct_count=100,
+            ),
+        ],
+        relationships=[],
+        sample_size=2,
+    )
+    return DatabaseProfile(
+        profile_id=uuid4(),
+        connection_id=uuid4(),
+        tables=[table],
+        created_at=datetime.now(UTC),
+    )
+
+
+def _fintech_flow_profile():
+    table = TableProfile(
+        schema="public",
+        name="segment_flows",
+        row_count=240,
+        columns=[
+            ColumnProfile(
+                name="customer_segment",
+                data_type="varchar",
+                nullable=False,
+                sample_values=["retail", "smb"],
+                distinct_count=4,
+            ),
+            ColumnProfile(
+                name="week_start",
+                data_type="timestamp",
+                nullable=False,
+                sample_values=["2026-01-05"],
+                distinct_count=24,
+            ),
+            ColumnProfile(
+                name="deposit_amount",
+                data_type="numeric",
+                nullable=False,
+                sample_values=["1500", "2100"],
+                distinct_count=180,
+                min_value="0",
+                max_value="5000",
+            ),
+            ColumnProfile(
+                name="withdrawal_amount",
+                data_type="numeric",
+                nullable=False,
+                sample_values=["300", "900"],
+                distinct_count=160,
+                min_value="0",
+                max_value="4800",
+            ),
+        ],
+        relationships=[],
+        sample_size=2,
+    )
+    return DatabaseProfile(
+        profile_id=uuid4(),
+        connection_id=uuid4(),
+        tables=[table],
+        created_at=datetime.now(UTC),
+    )
+
+
+def _fintech_transactions_profile():
+    table = TableProfile(
+        schema="public",
+        name="bank_transactions",
+        row_count=500,
+        columns=[
+            ColumnProfile(
+                name="business_date",
+                data_type="date",
+                nullable=False,
+                sample_values=["2026-04-30", "2026-04-29"],
+                distinct_count=120,
+            ),
+            ColumnProfile(
+                name="direction",
+                data_type="varchar",
+                nullable=False,
+                sample_values=["credit", "debit"],
+                distinct_count=2,
+            ),
+            ColumnProfile(
+                name="amount",
+                data_type="numeric",
+                nullable=False,
+                sample_values=["1500", "2100"],
+                distinct_count=320,
+                min_value="0",
+                max_value="5000",
+            ),
+            ColumnProfile(
+                name="status",
+                data_type="varchar",
+                nullable=False,
+                sample_values=["posted", "pending"],
+                distinct_count=3,
             ),
         ],
         relationships=[],
@@ -122,6 +227,105 @@ async def test_suggests_metrics_from_numeric_columns():
     assert metric["metadata"]["grain"] == "table-level"
     assert metric["metadata"]["exclusions"]
     assert metric["metadata"]["confidence_notes"]
+
+
+@pytest.mark.asyncio
+async def test_generates_query_datapoints_from_profile():
+    profile = _sample_profile()
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Orders", "columns": {"order_id": "Order id", "total_amount": "Total", "created_at": "Date"}}',
+            '{"public.orders": {"metrics": []}}',
+        ]
+    )
+
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    assert generated.query_datapoints
+    query_dp = generated.query_datapoints[0].datapoint
+    assert query_dp["type"] == "Query"
+    assert query_dp["metadata"]["connection_id"] == str(profile.connection_id)
+    assert query_dp["metadata"]["grain"] == "query-level"
+    assert query_dp["related_tables"] == ["public.orders"]
+    assert query_dp["sql_template"]
+
+    query_ids = {item.datapoint["datapoint_id"] for item in generated.query_datapoints}
+    assert "query_public_orders_top_customer_segment_total_amount" in query_ids
+    assert "query_public_orders_avg_customer_segment_total_amount" in query_ids
+    assert "query_public_orders_share_customer_segment_total_amount" in query_ids
+    assert "query_public_orders_monthly_total_amount_trend" in query_ids
+
+
+@pytest.mark.asyncio
+async def test_generates_deposit_and_withdrawal_trends_from_transaction_table():
+    profile = _fintech_transactions_profile()
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Bank transactions", "columns": {"business_date": "Business date", "direction": "Direction", "amount": "Amount"}}',
+            '{"public.bank_transactions": {"metrics": []}}',
+        ]
+    )
+
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    ids = {item.datapoint["datapoint_id"] for item in generated.query_datapoints}
+    assert "query_public_bank_transactions_weekly_deposit_trend" in ids
+    assert "query_public_bank_transactions_monthly_deposit_trend" in ids
+    assert "query_public_bank_transactions_weekly_withdrawal_trend" in ids
+
+    deposit_dp = next(
+        item.datapoint
+        for item in generated.query_datapoints
+        if item.datapoint["datapoint_id"] == "query_public_bank_transactions_weekly_deposit_trend"
+    )
+    assert "MAX(business_date)" in deposit_dp["sql_template"]
+    assert "direction = 'credit'" in deposit_dp["sql_template"]
+    assert "latest deposit date" in deposit_dp["description"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generates_net_flow_query_datapoint_when_columns_exist():
+    profile = _fintech_flow_profile()
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Segment flows", "columns": {"customer_segment": "Segment", "week_start": "Week", "deposit_amount": "Deposits", "withdrawal_amount": "Withdrawals"}}',
+            '{"public.segment_flows": {"metrics": []}}',
+        ]
+    )
+
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    ids = [item.datapoint["datapoint_id"] for item in generated.query_datapoints]
+    assert "query_public_segment_flows_weekly_net_flow_by_dimension" in ids
+    net_flow_dp = next(
+        item.datapoint
+        for item in generated.query_datapoints
+        if item.datapoint["datapoint_id"] == "query_public_segment_flows_weekly_net_flow_by_dimension"
+    )
+    assert "net_flow" in net_flow_dp["sql_template"].lower()
+    assert "lookback_weeks" in net_flow_dp["parameters"]
+
+
+@pytest.mark.asyncio
+async def test_limits_measure_family_generation_to_top_candidates():
+    profile = _fintech_flow_profile()
+    llm = FakeLLM(
+        [
+            '{"business_purpose": "Segment flows", "columns": {"customer_segment": "Segment", "week_start": "Week", "deposit_amount": "Deposits", "withdrawal_amount": "Withdrawals", "fee_amount": "Fees"}}',
+            '{"public.segment_flows": {"metrics": []}}',
+        ]
+    )
+
+    generator = DataPointGenerator(llm_provider=llm)
+    generated = await generator.generate_from_profile(profile, depth="metrics_full")
+
+    ids = {item.datapoint["datapoint_id"] for item in generated.query_datapoints}
+    assert "query_public_segment_flows_monthly_deposit_amount_trend" in ids
+    assert "query_public_segment_flows_monthly_withdrawal_amount_trend" in ids
+    assert not any("fee_amount" in datapoint_id for datapoint_id in ids)
 
 
 @pytest.mark.asyncio

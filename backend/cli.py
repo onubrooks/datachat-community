@@ -594,7 +594,7 @@ def _persist_generated_datapoints_for_connection(
 ) -> list[DataPoint]:
     adapter = TypeAdapter(DataPoint)
     persisted: list[DataPoint] = []
-    generated_items = [*generated.schema_datapoints, *generated.business_datapoints]
+    generated_items = generated.all_items()
     for item in generated_items:
         payload = dict(item.datapoint)
         metadata = payload.get("metadata")
@@ -3190,6 +3190,7 @@ def onboarding_wizard(
                 f"- Tables Failed: `{profile.tables_failed}`",
                 f"- Generated Schema DataPoints: `{len(generated.schema_datapoints)}`",
                 f"- Generated Business DataPoints: `{len(generated.business_datapoints)}`",
+                f"- Generated Query DataPoints: `{len(generated.query_datapoints)}`",
                 f"- Replaced Managed DataPoints: `{len(removed_ids)}`",
                 f"- Indexed New DataPoints: `{len(datapoints)}`",
                 "",

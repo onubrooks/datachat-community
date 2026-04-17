@@ -2,6 +2,14 @@
 
 This folder contains a realistic sample DataPoint bundle for banking/fintech analytics.
 
+Seeded date coverage for the matching demo dataset:
+
+- `bank_transactions`: `2025-09-01` through `2026-04-30`
+- `bank_fx_rates`: `2025-09-01` through `2026-04-30`
+- `bank_loan_payments`: `2025-01-15` through `2026-04-15`
+
+That coverage is intentional so prompts like weekly net flow, monthly interest-income trend, and recent failure-rate questions have real seeded rows for February, March, and April 2026.
+
 Includes:
 
 - Schema DataPoints for customers, accounts, transactions, cards, loans, and FX rates
