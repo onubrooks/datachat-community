@@ -10,6 +10,12 @@ DataChat helps teams move from raw database access to decision-ready answers by 
 
 ---
 
+## Stakeholder self-service walkthrough
+
+A stakeholder should be able to ask a business question without learning SQL first—and still see the query, relevant business definitions, and what needs checking before using the result. The [runnable Stakeholder SQL walkthrough](examples/stakeholder_sql/README.md) demonstrates this narrow path on fictional retail data: retrieve schema and metric context, draft SQL, compile against an allowlisted local database, and optionally preview the result. Its offline demo is explicitly canned; live LLM drafting requires an API key. DataChat itself provides the broader multi-database UI/API experience.
+
+---
+
 ## Community Direction
 
 - Get new users to first useful answer in 5 minutes or less.
