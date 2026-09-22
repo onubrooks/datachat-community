@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import json
 import math
 import os
-from pathlib import Path
 import re
 import sqlite3
 import sys
+from collections import Counter
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 ALLOWED_COLUMNS = {
@@ -55,7 +55,7 @@ def retrieve(question: str, catalog: list[dict], limit: int = 3) -> list[dict]:
     corpus = [tokens(" ".join((d["title"], d["body"]))) for d in catalog]
     df = Counter(term for doc in corpus for term in doc)
     scored = []
-    for doc, terms in zip(catalog, corpus):
+    for doc, terms in zip(catalog, corpus, strict=True):
         score = sum(math.log(1 + (len(catalog) + 1) / (df[t] + 1)) for t in query & terms)
         if score:
             scored.append((score, doc))
@@ -104,7 +104,7 @@ def validate_and_preview(sql: str, preview: bool = False) -> list[dict] | None:
             db.set_progress_handler(budget, 1000)
             cursor = db.execute("SELECT * FROM (" + statement + ") AS limited_preview LIMIT 20")
             names = [c[0] for c in cursor.description]
-            return [dict(zip(names, row)) for row in cursor.fetchall()]
+            return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
         except sqlite3.DatabaseError as exc:
             raise ValueError("Query failed the demo database safety/schema check") from exc
 
