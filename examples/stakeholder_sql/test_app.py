@@ -1,6 +1,7 @@
+import json
 import unittest
 
-from app import EXAMPLES, answer, retrieve, validate_and_preview
+from app import EXAMPLES, ROOT, answer, retrieve, validate_and_preview
 
 
 class StakeholderSQLTests(unittest.TestCase):
@@ -23,8 +24,6 @@ class StakeholderSQLTests(unittest.TestCase):
                 validate_and_preview(sql, preview=True)
 
     def test_retrieval_grounds_product_question(self):
-        import json
-        from app import ROOT
         docs = json.loads((ROOT / "catalog.json").read_text())
         selected = [d["id"] for d in retrieve("Which products have the highest net sales?", docs)]
         self.assertIn("products", selected)
