@@ -1,0 +1,22 @@
+[
+  {
+    "id": "orders",
+    "title": "Orders and transaction grain",
+    "body": "orders has one row per order_id. order_date is the purchase date. customer_id joins to customers.customer_id and product_id joins to products.product_id. status is paid or cancelled. gross_amount_usd and refund_amount_usd are US dollar amounts on the order; cancelled orders are excluded from revenue and order-count metrics. Alias: purchases, transactions."
+  },
+  {
+    "id": "customers",
+    "title": "Customer segments and regions",
+    "body": "customers has one row per customer_id. region and segment describe the customer. Join from orders.customer_id to customers.customer_id. This demo uses the customer's current region; a historical region-at-purchase analysis would need an event-time dimension. Email is intentionally excluded from the allowed analytics columns. Alias: buyers, clients."
+  },
+  {
+    "id": "products",
+    "title": "Product labels",
+    "body": "products has one row per product_id. product_name is a readable label. Join from orders.product_id to products.product_id. Alias: items, catalogue."
+  },
+  {
+    "id": "net_revenue",
+    "title": "Net revenue and net sales definition",
+    "body": "For paid orders, net revenue (also called net sales) is SUM(gross_amount_usd - refund_amount_usd). Exclude cancelled orders. A monthly trend uses strftime('%Y-%m', order_date). For product sales join orders to products by product_id. A refund is attributed to the original order date in this demo; real financial reporting may use a different recognized date."
+  }
+]

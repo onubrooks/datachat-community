@@ -890,7 +890,6 @@ class DataPointGenerator:
         return sorted(candidates, key=self._time_priority, reverse=True)[0]
 
     def _generate_query_datapoints(self, table: TableProfile) -> list[GeneratedDataPoint]:
-        table_key = f"{table.schema_name}.{table.name}"
         numeric_columns = self._select_measure_columns(table.columns, limit=2)
         time_column = self._select_time_column(table.columns)
         dimension_column = self._select_dimension_column(table.columns)

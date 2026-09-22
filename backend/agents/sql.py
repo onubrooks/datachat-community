@@ -16,6 +16,7 @@ from backend.database.catalog_templates import (
     get_list_tables_query,
 )
 from backend.database.operator_templates import build_operator_guidance, match_operator_templates
+from backend.domain_packs import DOMAIN_PACKS
 from backend.llm.factory import LLMProviderFactory
 from backend.llm.models import LLMMessage, LLMRequest
 from backend.models.agent import (
@@ -28,7 +29,6 @@ from backend.models.agent import (
     SQLGenerationError,
     ValidationIssue,
 )
-from backend.domain_packs import DOMAIN_PACKS
 from backend.profiling.cache import load_profile_cache
 from backend.prompts.loader import PromptLoader
 
